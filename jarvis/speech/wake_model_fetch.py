@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
-import os
 import shutil
 import tempfile
 import zipfile
@@ -113,8 +112,13 @@ def resolve_wake_language(cfg: Any) -> str:
 
 def _models_root(data_dir: str | None) -> Path:
     """Same layout ``wake_constants._vosk_models_root`` resolves — do not diverge."""
-    base = data_dir or os.environ.get("JARVIS__MEMORY__DATA_DIR") or "data"
-    return Path(base) / "wake_models" / "vosk"
+    from jarvis.speech.wake_constants import _data_dir_base
+
+    if data_dir and data_dir.strip():
+        base = Path(data_dir.strip())
+    else:
+        base = _data_dir_base()
+    return base / "wake_models" / "vosk"
 
 
 def _lang_dir_has_model(lang_dir: Path) -> bool:

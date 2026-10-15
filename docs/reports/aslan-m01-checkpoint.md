@@ -97,3 +97,35 @@ plus the captured stderr. A genuine failure still fails fast and honestly.
 enable/disable must prove the connection and atomically add/remove clients,
 tool adapters, capabilities and the `BrainToolsChanged` signal — so a stale
 adapter like the one above is cleaned up instead of relying on a lazy revive.
+
+## Cycle 3 — wake-model store resolved from the wrong directory  (IMPLEMENTED · TESTED)
+
+**Status note.** The *crash* was already fixed before this mission: commit
+`4cde1f9` ("an unreadable Vosk folder must not crash the wake plan") added
+`_safe_subdirs`, and `VOICE OFFLINE` lines stopped after 2026-10-15 04:52. The
+later `Access is denied` lines are the graceful warning only. Nothing was
+re-fixed — the *path* defect underneath was still there.
+
+**Root cause (confirmed).** `wake_constants._vosk_models_root` and
+`wake_model_fetch._models_root` both resolved the store as
+`os.environ.get("JARVIS__MEMORY__DATA_DIR") or "data"` — a path relative to the
+process CWD, and without the instance suffix. The desktop shortcut's "start in"
+is the user's home, so an unset override lists `<home>/data/wake_models/vosk`
+instead of the checkout's data dir (live: `PermissionError: [WinError 5] Access
+is denied: 'data\wake_models\vosk\en'`), and `JARVIS_INSTANCE=dev` never got the
+`data-dev` directory that `jarvis.core.config.DATA_DIR` uses.
+
+**Change.** New stdlib-only `_data_dir_base()` in `wake_constants` mirrors
+`config._resolve_data_dir` (override verbatim → `JARVIS_DATA_DIR` → repo path +
+`data`/`data-dev`); `_vosk_models_root` uses it; `wake_model_fetch._models_root`
+delegates to it so the fetch target and the read target cannot diverge (its own
+docstring demands that).
+
+**Verification.** 6 new tests in `tests/unit/speech/test_wake_models_root.py`
+(absolute, explicit override, CWD-independence, instance suffix, fetch/read
+parity, explicit-dir passthrough) → **6 passed**. `ruff` clean on all changed
+files; the 2 `E501`s it reports in `wake_constants.py` are pre-existing in HEAD
+(German whisper-noise regex, untouched).
+
+**Next action.** Same one-line fix in `jarvis/speech/local_models.py:288`
+(identical `or "data"` fallback), then the MCP config→live reconcile.

@@ -234,6 +234,32 @@ def sound_fold(token: str) -> str:
 # Vosk model directory resolution (vosk_kws engine)
 # ---------------------------------------------------------------------------
 
+def _data_dir_base() -> Path:
+    """Absolute data dir for the wake-model store, stdlib-only.
+
+    Mirrors ``jarvis.core.config.DATA_DIR`` without importing it: this module
+    must stay a stdlib leaf (see the module docstring). The previous fallback
+    was a bare ``"data"`` — a path relative to the process CWD — so the store
+    was read from wherever the app happened to be started. The desktop shortcut
+    starts in the user's home, and the live boot log shows the fallout:
+    ``PermissionError: [WinError 5] Access is denied:
+    'data\\wake_models\\vosk\\en'`` listed the wrong directory, the wake plan
+    fell back to a softer engine, and the wake word was silently degraded.
+
+    The override seams keep their ``os.environ`` semantics exactly as
+    ``config._resolve_data_dir`` reads them (an override is used verbatim, so
+    the two never disagree); the *instance* suffix (``data`` / ``data-dev``) is
+    reproduced so a dev app does not read the default app's wake models.
+    """
+    for var in ("JARVIS__MEMORY__DATA_DIR", "JARVIS_DATA_DIR"):
+        override = os.environ.get(var)
+        if override and override.strip():
+            return Path(override.strip())
+    instance = (os.environ.get("JARVIS_INSTANCE") or "").strip().lower()
+    name = "data" if instance in ("", "default") else f"data-{instance}"
+    return Path(__file__).resolve().parents[2] / name
+
+
 def _vosk_models_root() -> Path:
     """Per-install Vosk model store: ``<data>/wake_models/vosk/<lang>/``.
 
@@ -242,8 +268,7 @@ def _vosk_models_root() -> Path:
     per language — too heavy to bundle for every locale) and are fully
     offline afterwards.
     """
-    base = os.environ.get("JARVIS__MEMORY__DATA_DIR") or "data"
-    return Path(base) / "wake_models" / "vosk"
+    return _data_dir_base() / "wake_models" / "vosk"
 
 
 def _safe_subdirs(directory: Path) -> list[Path]:
