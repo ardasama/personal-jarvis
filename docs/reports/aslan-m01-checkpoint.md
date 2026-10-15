@@ -127,5 +127,9 @@ parity, explicit-dir passthrough) → **6 passed**. `ruff` clean on all changed
 files; the 2 `E501`s it reports in `wake_constants.py` are pre-existing in HEAD
 (German whisper-noise regex, untouched).
 
-**Next action.** Same one-line fix in `jarvis/speech/local_models.py:288`
-(identical `or "data"` fallback), then the MCP config→live reconcile.
+**Next action.** MCP config→live reconcile (deep-dive Wave 2).
+
+**Follow-up (same series, done).** `jarvis/speech/local_models.py`
+`models_root()` carried the identical `or "data"` fallback and now shares
+`_data_dir_base` too — all three speech-model paths (wake store, wake fetch,
+local models) resolve from one base. Test file now 8 tests, ruff clean.

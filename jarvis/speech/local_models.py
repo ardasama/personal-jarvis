@@ -39,7 +39,6 @@ from __future__ import annotations
 import ast
 import importlib.util
 import logging
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -284,9 +283,19 @@ def models_root(data_dir: str | None = None) -> Path:
     Honours the same ``JARVIS__MEMORY__DATA_DIR`` seam as the wake-model
     fetcher, so a headless install that relocated its data dir (ADR-0027) keeps
     every model in one place instead of scattering them across two conventions.
+
+    The default is the checkout's data dir (``jarvis.speech.wake_constants``
+    ``_data_dir_base``), never a bare ``"data"``: a CWD-relative default read
+    from wherever the app was started (the desktop shortcut starts in the user's
+    home) and ignored the ``data``/``data-dev`` instance split.
     """
-    base = data_dir or os.environ.get("JARVIS__MEMORY__DATA_DIR") or "data"
-    return Path(base) / "models"
+    from jarvis.speech.wake_constants import _data_dir_base
+
+    if data_dir and data_dir.strip():
+        base = Path(data_dir.strip())
+    else:
+        base = _data_dir_base()
+    return base / "models"
 
 
 def sherpa_model_dir(model_id: str, *, data_dir: str | None = None) -> Path:

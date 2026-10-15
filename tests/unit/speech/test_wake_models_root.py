@@ -64,3 +64,18 @@ def test_fetch_models_root_still_honours_an_explicit_dir(tmp_path) -> None:
     assert wake_model_fetch._models_root(str(tmp_path)) == (
         tmp_path / "wake_models" / "vosk"
     )
+
+
+def test_local_models_root_shares_the_same_data_base(monkeypatch) -> None:
+    """The speech-model dir must sit next to the wake-store base, not in the CWD."""
+    from jarvis.speech import local_models
+
+    _clear_seams(monkeypatch)
+    base = wake_constants._vosk_models_root().parent.parent
+    assert local_models.models_root(None) == base / "models"
+
+
+def test_local_models_root_still_honours_an_explicit_dir(tmp_path) -> None:
+    from jarvis.speech import local_models
+
+    assert local_models.models_root(str(tmp_path)) == tmp_path / "models"
