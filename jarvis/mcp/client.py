@@ -17,6 +17,8 @@ import logging
 import os
 import re
 import shutil
+import sys
+import tempfile
 import time
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -117,6 +119,13 @@ class MCPClient:
         self._circuit_breaker_failures = 0
         self._disabled_until_ns: int = 0
         self._http_auth: Any | None = None
+        # Real file handle receiving a stdio server's own stderr (see
+        # ``_open_stderr_capture``). None for non-stdio transports and whenever
+        # opening the sink failed.
+        self._stderr_capture: Any | None = None
+        # Last captured stderr tail (survives ``_close_stderr_capture``), so a
+        # start failure can name the real reason — not a bare "Connection closed".
+        self.last_stderr_tail: str = ""
 
     def set_http_auth(self, auth: Any) -> None:
         """Install caller-owned request authentication before opening transport."""
@@ -185,7 +194,16 @@ class MCPClient:
                     args=args,
                     env=env,
                 )
-                read, write = await stack.enter_async_context(stdio_client(params))
+                # Route the child's stderr into a real file we can read back.
+                # The SDK's default is ``sys.stderr``, which is ``None`` in the
+                # windowed desktop app, so a server dying during the handshake
+                # used to surface as a bare ``Connection closed`` (observed live
+                # for ``filesystem``). Fall back to the SDK default only if the
+                # sink could not be opened.
+                errlog = self._open_stderr_capture() or sys.stderr
+                read, write = await stack.enter_async_context(
+                    stdio_client(params, errlog=errlog)
+                )
             elif self.spec.transport == "sse":
                 from mcp.client.sse import sse_client
 
@@ -243,12 +261,26 @@ class MCPClient:
                 ready.set_result(None)
             await stop_requested.wait()
         except BaseException as exc:
+            # Pull the child's own words before anything is torn down. A start
+            # failure without this is undebuggable: ``ExceptionGroup`` hides the
+            # real cause ("unhandled errors in a TaskGroup") and the child's
+            # stderr is otherwise gone.
+            stderr_tail = self._read_stderr_tail()
+            if stderr_tail:
+                self.last_stderr_tail = stderr_tail
+                log.warning(
+                    "MCPClient[%s] server stderr: %s", self.spec.name, stderr_tail
+                )
+            described = _describe_start_failure(exc, stderr_tail)
             if not ready.done():
-                ready.set_exception(exc)
+                ready.set_exception(described)
             elif not isinstance(exc, asyncio.CancelledError):
-                log.warning("MCPClient[%s] lifecycle error: %s", self.spec.name, exc)
+                log.warning(
+                    "MCPClient[%s] lifecycle error: %s", self.spec.name, described
+                )
         finally:
             await self._close_exit_stack(stack)
+            self._close_stderr_capture()
             if self._exit_stack is stack:
                 self._exit_stack = None
                 self._session = None
@@ -298,6 +330,57 @@ class MCPClient:
         self._owner_task = None
         self._owner_ready = None
         self._stop_requested = None
+
+    # ---- stderr capture (stdio diagnosability) ------------------------
+
+    def _open_stderr_capture(self) -> Any | None:
+        """Open a real file handle to collect a stdio server's own stderr.
+
+        ``stdio_client`` forwards the child's stderr to ``errlog``, which
+        defaults to ``sys.stderr`` — ``None`` in the windowed desktop app. A
+        server that dies during the handshake (missing native dependency, wrong
+        Node version, bad package name) then reaches the registry as a bare
+        ``Connection closed`` with no cause attached. A ``TemporaryFile`` has a
+        real ``fileno`` (which ``anyio.open_process`` needs) and stays open for
+        the client's whole life, so late crashes are captured too.
+        """
+        try:
+            handle = tempfile.TemporaryFile(mode="w+b")
+        except OSError as exc:  # noqa: BLE001 — capture is best-effort
+            log.warning(
+                "MCPClient[%s] stderr capture unavailable: %s", self.spec.name, exc
+            )
+            return None
+        self._stderr_capture = handle
+        return handle
+
+    def _read_stderr_tail(self, limit: int = 2000) -> str:
+        """Return the captured stderr so far, collapsed to a single log line."""
+        handle = self._stderr_capture
+        if handle is None:
+            return ""
+        try:
+            handle.flush()
+            handle.seek(0)
+            data = handle.read()
+        except (OSError, ValueError):
+            return ""
+        if not data:
+            return ""
+        text = data if isinstance(data, str) else data.decode("utf-8", errors="replace")
+        text = " ".join(text.split())
+        if len(text) > limit:
+            text = "…" + text[-limit:]
+        return text
+
+    def _close_stderr_capture(self) -> None:
+        handle = self._stderr_capture
+        self._stderr_capture = None
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
 
     # ---- Interaction ----------------------------------------------------
 
@@ -430,6 +513,64 @@ class MCPClient:
 # ----------------------------------------------------------------------
 # Utilities
 # ----------------------------------------------------------------------
+
+def _describe_exception(exc: BaseException) -> str:
+    """Flatten an (Exception)Group into a readable ``A: ... | B: ...`` chain.
+
+    ``anyio``/``mcp`` wrap a stdio handshake failure in an ``ExceptionGroup``
+    whose top-level ``str()`` is only "unhandled errors in a TaskGroup (1
+    sub-exception)" — useless in a log line. Walking the tree surfaces the real
+    leaf causes (``ClosedResourceError``, a child traceback string, ...).
+    """
+    parts: list[str] = []
+    seen: set[int] = set()
+
+    def walk(node: BaseException) -> None:
+        if id(node) in seen:
+            return
+        seen.add(id(node))
+        if isinstance(node, BaseExceptionGroup):
+            for sub in node.exceptions:
+                walk(sub)
+            return
+        label = f"{type(node).__name__}: {node}" if str(node) else type(node).__name__
+        parts.append(label)
+
+    walk(exc)
+    if not parts:
+        parts.append(f"{type(exc).__name__}: {exc}")
+    return " | ".join(dict.fromkeys(parts))
+
+
+def _describe_start_failure(
+    exc: BaseException, stderr_tail: str
+) -> BaseException:
+    """Return the exception to surface for a failed start, with real detail.
+
+    Keeps the original object when there is nothing to add, so callers that
+    assert on the type (``FileNotFoundError`` for a missing launcher) are
+    unaffected. When the child wrote to stderr, or the failure arrived wrapped
+    in an ``ExceptionGroup``, a ``RuntimeError`` carrying the flattened chain
+    and the child's own words is returned instead — the message the registry
+    logs and the UI badge shows.
+    """
+    detail = _describe_exception(exc)
+    has_group = isinstance(exc, BaseExceptionGroup)
+
+    if not stderr_tail and not has_group:
+        return exc
+
+    if stderr_tail:
+        message = f"{detail} — server stderr: {stderr_tail}" if detail else (
+            f"server stderr: {stderr_tail}"
+        )
+    else:
+        message = detail
+
+    described = RuntimeError(message)
+    described.__cause__ = exc
+    return described
+
 
 def _extract_error_text(result: Any) -> str:
     """Extract the error text from a CallToolResult(isError=True)."""

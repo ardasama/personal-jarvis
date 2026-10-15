@@ -105,7 +105,7 @@ async def test_start_does_not_which_check_when_launcher_present(monkeypatch) -> 
 
     import mcp.client.stdio as stdio_mod
 
-    monkeypatch.setattr(stdio_mod, "stdio_client", lambda params: _BoomStdioClient())
+    monkeypatch.setattr(stdio_mod, "stdio_client", lambda _params, **_kw: _BoomStdioClient())
 
     client = MCPClient(_stdio_spec(command="npx", name="brave-search"))
     with pytest.raises(RuntimeError, match="boom past the which"):
@@ -183,7 +183,7 @@ async def test_start_and_stop_keep_contexts_on_one_owner_task(monkeypatch) -> No
     import mcp.client.stdio as stdio_mod
 
     monkeypatch.setattr(shutil, "which", lambda _cmd: r"C:\fake\npx.cmd")
-    monkeypatch.setattr(stdio_mod, "stdio_client", lambda _params: _TaskBoundTransport())
+    monkeypatch.setattr(stdio_mod, "stdio_client", lambda _params, **_kw: _TaskBoundTransport())
     monkeypatch.setattr(mcp, "ClientSession", _TaskBoundSession)
 
     client = MCPClient(_stdio_spec())
@@ -243,7 +243,7 @@ async def test_cancelled_stop_finishes_owner_cleanup_and_allows_restart(
     import mcp.client.stdio as stdio_mod
 
     monkeypatch.setattr(shutil, "which", lambda _cmd: r"C:\fake\npx.cmd")
-    monkeypatch.setattr(stdio_mod, "stdio_client", lambda _params: _SlowExitTransport())
+    monkeypatch.setattr(stdio_mod, "stdio_client", lambda _params, **_kw: _SlowExitTransport())
     monkeypatch.setattr(mcp, "ClientSession", _Session)
 
     client = MCPClient(_stdio_spec())
@@ -265,3 +265,87 @@ async def test_cancelled_stop_finishes_owner_cleanup_and_allows_restart(
     await client.start()
     assert client._session is not None
     await client.stop()
+
+
+# --- stdio stderr capture: a start failure must name its real cause ----------
+
+
+def test_describe_exception_flattens_a_group() -> None:
+    """The top-level ExceptionGroup string is useless in a log; the leaf shows."""
+    import jarvis.mcp.client as client_mod
+
+    group = ExceptionGroup(
+        "unhandled errors in a TaskGroup",
+        [RuntimeError("llama-server binary not found"), ValueError("bad arg")],
+    )
+    described = client_mod._describe_exception(group)
+    assert "llama-server binary not found" in described
+    assert "bad arg" in described
+    # No leftover wrapper noise.
+    assert "TaskGroup" not in described
+
+
+def test_describe_start_failure_keeps_type_when_nothing_to_add() -> None:
+    """A plain failure with no stderr keeps its original type/identity."""
+    import jarvis.mcp.client as client_mod
+
+    original = FileNotFoundError("brave-search: install Node.js 18+")
+    assert client_mod._describe_start_failure(original, "") is original
+
+
+def test_registry_error_includes_stderr_tail_once() -> None:
+    """The badge-facing error string carries the captured stderr exactly once."""
+    from jarvis.mcp.registry import _with_stderr
+
+    class _Client:
+        last_stderr_tail = "boom: missing native dep"
+
+    first = _with_stderr("RuntimeError: Connection closed", _Client())
+    assert "boom: missing native dep" in first
+    # Idempotent: a message that already carries the tail is not doubled.
+    assert _with_stderr(first, _Client()) == first
+
+
+def test_registry_error_without_tail_is_unchanged() -> None:
+    from jarvis.mcp.registry import _with_stderr
+
+    class _Client:
+        last_stderr_tail = ""
+
+    assert _with_stderr("RuntimeError: Connection closed", _Client()) == (
+        "RuntimeError: Connection closed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_failure_surfaces_the_child_stderr() -> None:
+    """A stdio server that dies during the handshake must surface WHY.
+
+    Regression for the live ``filesystem`` failure: every start used to report
+    only ``Startfehler: Connection closed`` because the child's stderr went to
+    ``sys.stderr`` (``None`` in the windowed desktop app). The child here writes
+    a reason and exits non-zero — that reason must reach ``str(error)`` and
+    ``client.last_stderr_tail``.
+    """
+    import sys
+
+    spec = MCPServerSpec(
+        name="dies-at-handshake",
+        display="Dies",
+        description="exits before initialize",
+        install_command=[
+            sys.executable,
+            "-c",
+            "import sys; sys.stderr.write('BOOM-REASON-42'); "
+            "sys.stderr.flush(); sys.exit(3)",
+        ],
+        transport="stdio",
+    )
+    client = MCPClient(spec)
+    with pytest.raises(Exception) as excinfo:
+        await client.start()
+
+    assert "BOOM-REASON-42" in str(excinfo.value)
+    assert "BOOM-REASON-42" in client.last_stderr_tail
+    # The useless wrapper string must not be all we say.
+    assert "sub-exception" not in str(excinfo.value)

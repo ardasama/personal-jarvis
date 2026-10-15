@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from .client import MCPClient
@@ -205,12 +205,13 @@ class MCPRegistry:
                 log.info("MCP server %s started", spec.name)
             except TimeoutError:
                 error_msg = f"start timeout ({_START_TIMEOUT_S:.0f}s)"
+                error_msg = _with_stderr(error_msg, client)
                 self._errors[spec.name] = error_msg
                 log.error("MCP-Server %s Startfehler: %s", spec.name, error_msg)
             except Exception as e:  # noqa: BLE001
-                error_msg = f"{type(e).__name__}: {e}"
+                error_msg = _with_stderr(f"{type(e).__name__}: {e}", client)
                 self._errors[spec.name] = error_msg
-                log.error("MCP-Server %s Startfehler: %s", spec.name, e)
+                log.error("MCP-Server %s Startfehler: %s", spec.name, error_msg)
 
         tasks = [
             _start_one(self._specs[n])
@@ -230,6 +231,20 @@ class MCPRegistry:
             *(c.stop() for c in clients),
             return_exceptions=True,
         )
+
+
+def _with_stderr(message: str, client: Any) -> str:
+    """Append a failed client's captured server stderr, exactly once.
+
+    ``MCPClient`` already folds stderr into the exception it raises, but a
+    start *timeout* raises inside ``asyncio.wait_for`` with no such exception,
+    and the plugin badge reads ``self._errors`` — so the tail is appended here
+    unless the message already carries it.
+    """
+    tail = getattr(client, "last_stderr_tail", "")
+    if tail and "server stderr:" not in message:
+        return f"{message} | server stderr: {tail}"
+    return message
 
 
 def _env_from_mcp_json(name: str) -> dict[str, str] | None:
