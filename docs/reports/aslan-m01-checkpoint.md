@@ -160,3 +160,31 @@ no-op, stop_one keeps a client whose stop raised). `ruff` clean.
 removed server must drop its `MCPToolAdapter` entries and publish one
 `BrainToolsChanged`, so no stale adapter is left for the lazy revive (Cycle 2)
 to paper over.
+
+## Cycle 5 — REST disable/stop/delete stop honestly  (IMPLEMENTED · TESTED)
+
+**Finding (the Cycle-4 "next action" was partly wrong — corrected here).** The
+adapter leak flagged in the deep-dive is already handled in the current code:
+`McpToolLoader.expand()` rebuilds one `MCPToolAdapter` per tool of every
+`active_clients()` entry, and `mcp_routes` already publishes `BrainToolsChanged`
+on enable/disable/delete. So no stale adapter survives. What *was* wrong: the
+routes stopped a client by reaching into the private map
+(`registry._clients.pop`, three `# noqa: SLF001` sites) and always answered
+`stopped: True` / `status: "stopped"` even when the stop had raised.
+
+**Change.** `jarvis/ui/web/mcp_routes.py` — `disable_mcp`, `stop_mcp` and
+`delete_mcp` now call `registry.stop_one(name)` (Cycle 4) and report the real
+outcome (`stopped` false, or `status: "failed"`, when the stop did not take).
+The probe cleanup's silent `except Exception: pass` now logs its cause (AP-30).
+The private `_clients.pop` calls in those three paths are gone.
+
+**Verification.** `pytest tests/unit/ui/test_mcp_routes_events.py tests/unit/mcp`
+→ **137 passed** (3 new: disable stops through the registry, disable reports a
+failed stop honestly, stop reports `failed`). `ruff` on `mcp_routes.py` is now
+**clean** — it carried 2 `S110` (silent `except: pass`) at HEAD; both are gone.
+
+**Next action.** Provider independence: the remaining engine failures in the
+live log are `Ollama llama-server binary not found`, invalid Grok/OpenAI keys
+and Gemini free-tier quota — trace the fallback chain so a missing or failing
+provider degrades across families (AP-22) instead of surfacing the last raw
+error.

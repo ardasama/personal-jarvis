@@ -118,3 +118,100 @@ async def test_enable_mcp_no_bus_does_not_raise() -> None:
         result = await mcp_routes.enable_mcp("x", request)
 
     assert result["ok"] is True
+
+
+# --- disable/stop: the per-server stop is public and reported honestly -------
+
+
+def _registry_with_stop(name: str, result: bool):
+    async def _stop_one(_n: str) -> bool:
+        return result
+
+    return SimpleNamespace(
+        get_spec=lambda n: SimpleNamespace(name=n),
+        active_clients=lambda: {name: SimpleNamespace()},
+        last_error=lambda n: None,
+        stop_one=_stop_one,
+    )
+
+
+async def test_disable_mcp_stops_through_the_registry() -> None:
+    """disable must use MCPRegistry.stop_one, not a private _clients.pop."""
+    from jarvis.ui.web import mcp_routes
+
+    calls: list[str] = []
+
+    async def _stop_one(n: str) -> bool:
+        calls.append(n)
+        return True
+
+    registry = _registry_with_stop("test-server", True)
+    registry.stop_one = _stop_one
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                mcp_registry=registry, tool_registry={}, bus=_FakeBus(), cfg=None
+            )
+        )
+    )
+
+    with (
+        patch.object(mcp_routes.mcp_state, "disable", return_value=None),
+        patch.object(
+            mcp_routes, "_sync_tools_for_server", new=AsyncMock(return_value=None)
+        ),
+    ):
+        result = await mcp_routes.disable_mcp("test-server", request)
+
+    assert result["enabled"] is False
+    assert result["stopped"] is True
+    assert calls == ["test-server"]
+
+
+async def test_disable_mcp_reports_a_failed_stop_honestly() -> None:
+    """A stop that did not take effect must not be reported as stopped."""
+    from jarvis.ui.web import mcp_routes
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                mcp_registry=_registry_with_stop("test-server", False),
+                tool_registry={},
+                bus=_FakeBus(),
+                cfg=None,
+            )
+        )
+    )
+
+    with (
+        patch.object(mcp_routes.mcp_state, "disable", return_value=None),
+        patch.object(
+            mcp_routes, "_sync_tools_for_server", new=AsyncMock(return_value=None)
+        ),
+    ):
+        result = await mcp_routes.disable_mcp("test-server", request)
+
+    assert result["stopped"] is False
+
+
+async def test_stop_mcp_reports_status_failed_when_the_stop_does_not_take() -> None:
+    from jarvis.ui.web import mcp_routes
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                mcp_registry=_registry_with_stop("test-server", False),
+                tool_registry={},
+                bus=_FakeBus(),
+                cfg=None,
+            )
+        )
+    )
+
+    with patch.object(
+        mcp_routes, "_sync_tools_for_server", new=AsyncMock(return_value=None)
+    ):
+        result = await mcp_routes.stop_mcp("test-server", request)
+
+    assert result["status"] == "failed"

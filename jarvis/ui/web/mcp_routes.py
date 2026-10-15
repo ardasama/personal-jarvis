@@ -266,20 +266,22 @@ async def disable_mcp(name: str, request: Request) -> dict[str, Any]:
 
     mcp_state.disable(name)
 
-    active = registry.active_clients()
-    if name in active:
+    # Stop a running client through the registry's public per-server stop: it
+    # keeps the client (and says so) when its own stop fails, so the response
+    # can never claim a live disable that did not happen.
+    stopped = True
+    if name in registry.active_clients():
         try:
-            await active[name].stop()
+            stopped = await registry.stop_one(name)
         except Exception as exc:  # noqa: BLE001
             log.warning("Stop of %s failed: %s", name, exc)
-        # Clean up the registry slot
-        registry._clients.pop(name, None)  # noqa: SLF001
+            stopped = False
 
     # Remove the stopped server's tools from the tool registry + notify brain
     await _sync_tools_for_server(request, registry, name, adding=False)
     await _publish_brain_tools_changed(request, f"mcp_disabled:{name}")
 
-    return {"ok": True, "name": name, "enabled": False, "stopped": True}
+    return {"ok": True, "name": name, "enabled": False, "stopped": stopped}
 
 
 @router.post("/{name}/start")
@@ -319,16 +321,19 @@ async def stop_mcp(name: str, request: Request) -> dict[str, Any]:
     if name not in active:
         return {"ok": True, "name": name, "status": "not-running"}
 
+    # Public per-server stop (keeps the client if the stop fails, so the status
+    # never reads "stopped" for a transport that is still up).
+    stopped = True
     try:
-        await active[name].stop()
+        stopped = await registry.stop_one(name)
     except Exception as exc:  # noqa: BLE001
         log.warning("Stop of %s failed: %s", name, exc)
-    registry._clients.pop(name, None)  # noqa: SLF001
+        stopped = False
 
     await _sync_tools_for_server(request, registry, name, adding=False)
     await _publish_brain_tools_changed(request, f"mcp_stopped:{name}")
 
-    return {"ok": True, "name": name, "status": "stopped"}
+    return {"ok": True, "name": name, "status": "stopped" if stopped else "failed"}
 
 
 @router.post("/import-claude-desktop")
@@ -408,8 +413,8 @@ async def check_mcp(name: str, request: Request) -> dict[str, Any]:
     finally:
         try:
             await client.stop()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.debug("MCP probe cleanup stop of %s failed: %s", name, exc)
 
 
 @router.post("/{name}/credentials")
@@ -578,15 +583,12 @@ async def delete_mcp(name: str, request: Request) -> dict[str, Any]:
             400, f"'{name}' is an essential bootstrap server — can only be disabled."
         )
 
-    # Stop the active client
-    if registry is not None:
-        active = registry.active_clients()
-        if name in active:
-            try:
-                await active[name].stop()
-            except Exception:  # noqa: BLE001
-                pass
-            registry._clients.pop(name, None)  # noqa: SLF001
+    # Stop the active client through the public per-server stop.
+    if registry is not None and name in registry.active_clients():
+        try:
+            await registry.stop_one(name)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Stop of %s during delete failed: %s", name, exc)
 
     # Delete the mcp.json entry
     removed = mcp_state.remove_server(name)
