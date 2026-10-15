@@ -349,3 +349,68 @@ async def test_start_failure_surfaces_the_child_stderr() -> None:
     assert "BOOM-REASON-42" in client.last_stderr_tail
     # The useless wrapper string must not be all we say.
     assert "sub-exception" not in str(excinfo.value)
+
+
+# --- call_tool revives a client that outlived its server --------------------
+
+
+@pytest.mark.asyncio
+async def test_call_tool_revives_a_stopped_client() -> None:
+    """An adapter whose server dropped must get one bounded restart, not a
+    permanent 'MCPClient not started' (the live browseros-neo symptom)."""
+    calls: list[str] = []
+
+    class _Session:
+        async def call_tool(self, name, args):
+            calls.append(name)
+            return SimpleNamespace(isError=False, content=[])
+
+    client = MCPClient(_stdio_spec(name="browseros-neo"))
+
+    async def _fake_start() -> None:
+        calls.append("start")
+        client._session = _Session()
+
+    client.start = _fake_start  # type: ignore[method-assign]
+
+    result = await client.call_tool("tabs", {})
+
+    assert calls == ["start", "tabs"]
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_call_tool_backs_off_after_a_failed_revive() -> None:
+    """A dead server is not re-restarted (nor re-charged the timeout) per call."""
+    attempts = 0
+
+    client = MCPClient(_stdio_spec(name="dead-server"))
+
+    async def _failing_start() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("Connection closed")
+
+    client.start = _failing_start  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="MCPClient not started"):
+        await client.call_tool("tabs", {})
+    assert attempts == 1
+
+    # Within the backoff window the second call must NOT restart again.
+    with pytest.raises(RuntimeError, match="retry in"):
+        await client.call_tool("tabs", {})
+    assert attempts == 1
+
+
+def test_not_started_message_includes_captured_stderr() -> None:
+    client = MCPClient(_stdio_spec(name="filesystem"))
+    client.last_stderr_tail = "missing native dep"
+    message = client._not_started_message()
+    assert "MCPClient not started" in message
+    assert "missing native dep" in message
+
+
+def test_not_started_message_without_reason_is_plain() -> None:
+    client = MCPClient(_stdio_spec(name="filesystem"))
+    assert client._not_started_message() == "filesystem: MCPClient not started"

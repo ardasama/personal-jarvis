@@ -69,3 +69,31 @@ still open.
 **Next action.** Restart the desktop app once and read the new stderr line for
 `filesystem`; then fix the `browseros-neo` enable/disable lifecycle
 (reconcile desired config → live state).
+
+## Cycle 2 — revive an MCP client that outlived its server  (IMPLEMENTED · TESTED)
+
+**Symptom.** `MCPTool browseros-neo/tabs error … browseros-neo: MCPClient not
+started` (5×) and one `timed out after 20s`. The server *had* started earlier in
+the same session (`MCPClient[browseros-neo] ready`), so the tool adapter existed
+while its client's transport was dead.
+
+**Root cause (confirmed).** Adapters are created from `active_clients()` at
+start; nothing removes them when a client later stops or is deleted (also
+flagged in `docs/reports/jarvis-mcp-deep-dive-2026-08-08.md` §3 item 2). The
+adapter keeps a reference to the dead client, and every call hit
+`call_tool`'s straight `raise RuntimeError("MCPClient not started")`.
+
+**Change.** `jarvis/mcp/client.py` — `call_tool` now calls a new
+`_ensure_started()` when there is no session: one bounded restart
+(`_LAZY_START_TIMEOUT_S`, default 15 s, `JARVIS_MCP_START_TIMEOUT_S`), then a
+60 s backoff after a failed attempt so a dead server is not re-charged the
+timeout on every later call. `_not_started_message()` reports the real reason
+plus the captured stderr. A genuine failure still fails fast and honestly.
+
+**Verification.** `pytest tests/unit/mcp` → 127 passed; `ruff check` clean.
+4 new tests: revive path, backoff-once, and the two message shapes.
+
+**Next action.** MCP config→live **reconcile** (one idempotent operation):
+enable/disable must prove the connection and atomically add/remove clients,
+tool adapters, capabilities and the `BrainToolsChanged` signal — so a stale
+adapter like the one above is cleaned up instead of relying on a lazy revive.

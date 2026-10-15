@@ -90,6 +90,31 @@ def _read_call_timeout_s() -> float:
 # Module-level so a test can monkeypatch it and call_tool re-reads it each call.
 _CALL_TIMEOUT_S = _read_call_timeout_s()
 
+
+def _read_lazy_start_timeout_s() -> float:
+    """Ceiling (seconds) for reviving a stopped MCP client on first use.
+
+    An adapter can outlive its client: a server that started at boot and later
+    dropped (``MCPClient[browseros-neo] ... stop error``) leaves registered
+    tools pointing at a client with no session, so every call failed with a
+    bare ``MCPClient not started``. ``call_tool`` now tries one bounded restart
+    before giving up. Kept below the registry's 60 s boot ceiling so a stuck
+    server still fails fast on a voice turn; override with
+    ``JARVIS_MCP_START_TIMEOUT_S``.
+    """
+    raw = os.environ.get("JARVIS_MCP_START_TIMEOUT_S")
+    if raw:
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            log.warning("JARVIS_MCP_START_TIMEOUT_S=%r is not a number; using 15s", raw)
+    return 15.0
+
+
+_LAZY_START_TIMEOUT_S = _read_lazy_start_timeout_s()
+
 # Hard ceiling for stop(): the transport's anyio task group can stall for ~20 s
 # on a cross-task cancel-scope exit (see stop()). Module-level so a test can
 # monkeypatch it; stop() re-reads it each call.
@@ -126,6 +151,10 @@ class MCPClient:
         # Last captured stderr tail (survives ``_close_stderr_capture``), so a
         # start failure can name the real reason — not a bare "Connection closed".
         self.last_stderr_tail: str = ""
+        # Backoff marker for the lazy restart in ``call_tool``: a failed revive
+        # must not be retried on every subsequent call (each attempt can cost
+        # the start timeout on a voice turn).
+        self._start_failed_until_ns: int = 0
 
     def set_http_auth(self, auth: Any) -> None:
         """Install caller-owned request authentication before opening transport."""
@@ -331,6 +360,39 @@ class MCPClient:
         self._owner_ready = None
         self._stop_requested = None
 
+    async def _ensure_started(self) -> None:
+        """Revive a stopped client once, then back off after a failed attempt.
+
+        Called from ``call_tool`` only when there is no session. A single
+        bounded ``start()`` turns the common "adapter outlived its client" case
+        back into a working tool; a server that is genuinely down fails fast and
+        is not retried (and re-charged the start timeout) on every later call.
+        """
+        if self._session is not None:
+            return
+        now = time.time_ns()
+        if self._start_failed_until_ns > now:
+            remaining = (self._start_failed_until_ns - now) // 1_000_000_000
+            raise RuntimeError(
+                f"{self._not_started_message()} (retry in {remaining}s)"
+            )
+        try:
+            await asyncio.wait_for(self.start(), timeout=_LAZY_START_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 — surfaced as an honest message
+            self._start_failed_until_ns = time.time_ns() + _CB_COOLDOWN_NS
+            raise RuntimeError(self._not_started_message(exc)) from exc
+        else:
+            self._start_failed_until_ns = 0
+
+    def _not_started_message(self, exc: BaseException | None = None) -> str:
+        """Honest "not running" text carrying the last real reason, if known."""
+        detail = f"{self.spec.name}: MCPClient not started"
+        reason = _describe_exception(exc) if exc is not None else ""
+        if self.last_stderr_tail and "server stderr:" not in reason:
+            tail = f"server stderr: {self.last_stderr_tail}"
+            reason = f"{reason} | {tail}" if reason else tail
+        return f"{detail} — {reason}" if reason else detail
+
     # ---- stderr capture (stdio diagnosability) ------------------------
 
     def _open_stderr_capture(self) -> Any | None:
@@ -397,7 +459,11 @@ class MCPClient:
                 f"(cooldown {(self._disabled_until_ns - now) // 1_000_000_000}s)"
             )
         if self._session is None:
-            raise RuntimeError(f"{self.spec.name}: MCPClient not started")
+            # The adapter may have outlived its client: a server that started at
+            # boot and later dropped leaves registered tools pointing here, and
+            # every call used to fail with a bare "MCPClient not started". Try
+            # one bounded revive; a genuinely broken server still fails fast.
+            await self._ensure_started()
 
         try:
             # Per-call timeout: the MCP SDK has no built-in ceiling, so a server
