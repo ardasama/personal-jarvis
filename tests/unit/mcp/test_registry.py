@@ -115,3 +115,61 @@ async def test_registry_stop_all_is_safe_when_empty() -> None:
     reg = MCPRegistry()
     await reg.stop_all()
     assert reg.active_clients() == {}
+
+
+# --- per-server start/stop (the honest half of a live enable/disable) --------
+
+
+@pytest.mark.asyncio
+async def test_registry_start_one_is_false_for_an_unregistered_name() -> None:
+    reg = MCPRegistry()
+    assert await reg.start_one("ghost") is False
+
+
+@pytest.mark.asyncio
+async def test_registry_start_one_is_idempotent_for_a_running_server() -> None:
+    reg = MCPRegistry()
+    reg._clients["notion"] = object()  # type: ignore[assignment]
+    assert await reg.start_one("notion") is True
+
+
+@pytest.mark.asyncio
+async def test_registry_stop_one_stops_and_forgets_a_running_client() -> None:
+    reg = MCPRegistry()
+
+    class _Client:
+        stopped = False
+
+        async def stop(self) -> None:
+            self.stopped = True
+
+    client = _Client()
+    reg._clients["notion"] = client  # type: ignore[assignment]
+    reg._errors["notion"] = "stale start error"
+
+    assert await reg.stop_one("notion") is True
+    assert client.stopped is True
+    assert reg.active_names() == []
+    assert reg.last_error("notion") is None
+
+
+@pytest.mark.asyncio
+async def test_registry_stop_one_is_a_noop_for_an_unknown_server() -> None:
+    reg = MCPRegistry()
+    assert await reg.stop_one("never-started") is True
+
+
+@pytest.mark.asyncio
+async def test_registry_stop_one_keeps_a_client_whose_stop_failed() -> None:
+    """A wedged transport must leave the client in place so the caller can
+    still ask for a restart, rather than claim a live disable that failed."""
+    reg = MCPRegistry()
+
+    class _BadClient:
+        async def stop(self) -> None:
+            raise RuntimeError("transport wedged")
+
+    reg._clients["broken"] = _BadClient()  # type: ignore[assignment]
+
+    assert await reg.stop_one("broken") is False
+    assert reg.active_names() == ["broken"]

@@ -268,10 +268,22 @@ class ManageMcpServerTool:
             except Exception as exc:  # noqa: BLE001
                 log.error("manage-mcp-server: live enable of %r failed: %s", name, exc)
         elif not enabled:
-            # No per-server stop in the registry — a disable needs a restart to
-            # fully drop a running client. Honest flag rather than a false claim.
-            requires_restart = self._is_running(name)
-            applied_live = not requires_restart
+            if registry is None:
+                # No live registry to act on — report against the last-known
+                # state instead of claiming a live disable.
+                requires_restart = self._is_running(name)
+                applied_live = not requires_restart
+            else:
+                # The registry now has a per-server stop, so a disable can take
+                # effect live instead of always demanding an app restart.
+                try:
+                    applied_live = await registry.stop_one(name)
+                except Exception as exc:  # noqa: BLE001
+                    log.error(
+                        "manage-mcp-server: live disable of %r failed: %s", name, exc
+                    )
+                    applied_live = False
+                requires_restart = not applied_live
 
         log.info(
             "manage-mcp-server: %s %r (live=%s restart=%s) reason=%r",

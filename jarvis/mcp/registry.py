@@ -221,6 +221,47 @@ class MCPRegistry:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=False)
 
+    async def start_one(self, name: str) -> bool:
+        """Start a single registered server; True when it is live afterwards.
+
+        Idempotent — an already-running server is left alone. Reuses
+        :meth:`start_enabled`, so a per-server failure lands in :attr:`_errors`
+        with the captured stderr exactly as it does at boot.
+        """
+        if name in self._clients:
+            return True
+        if name not in self._specs:
+            return False
+        await self.start_enabled([name])
+        return name in self._clients
+
+    async def stop_one(self, name: str) -> bool:
+        """Stop and forget one running server; True when it is gone afterwards.
+
+        The half that made a live *disable* dishonest: with no per-server stop
+        the registry still answered "running", so disabling a server had to
+        demand an app restart even when nothing needed one. The client is kept
+        when its own (self-bounded) stop fails, so the caller can still ask for
+        a restart instead of claiming a live success that did not happen.
+        """
+        client = self._clients.get(name)
+        if client is None:
+            return True
+        try:
+            await asyncio.wait_for(client.stop(), timeout=_START_TIMEOUT_S)
+        except TimeoutError:
+            log.warning(
+                "MCP server %s stop timed out after %.0fs", name, _START_TIMEOUT_S
+            )
+            return False
+        except Exception as e:  # noqa: BLE001
+            log.warning("MCP server %s stop error: %s", name, e)
+            return False
+        self._clients.pop(name, None)
+        self._errors.pop(name, None)
+        log.info("MCP server %s stopped", name)
+        return True
+
     async def stop_all(self) -> None:
         """Stop all active clients in parallel (best effort)."""
         clients = list(self._clients.values())

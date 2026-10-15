@@ -133,3 +133,30 @@ files; the 2 `E501`s it reports in `wake_constants.py` are pre-existing in HEAD
 `models_root()` carried the identical `or "data"` fallback and now shares
 `_data_dir_base` too — all three speech-model paths (wake store, wake fetch,
 local models) resolve from one base. Test file now 8 tests, ruff clean.
+
+## Cycle 4 — a per-server stop, so `disable` can be honest  (IMPLEMENTED · TESTED)
+
+**Symptom.** The chat/voice tool logged `enable 'filesystem' (live=False
+restart=True)` and a disable could only ever answer "restart required" — the
+deep-dive (`docs/reports/jarvis-mcp-deep-dive-2026-08-08.md` §3 item 1) named
+the missing half: the registry starts servers as a *group* and has no
+per-server stop, so a running client could not be dropped live.
+
+**Change.**
+- `jarvis/mcp/registry.py` — new `start_one(name)` (idempotent; reuses
+  `start_enabled` so per-server errors still land in `_errors` with the Cycle-1
+  stderr) and `stop_one(name)` (bounded by `_START_TIMEOUT_S`; only forgets the
+  client and clears its error **after** a successful stop — a wedged transport
+  is kept so the caller can still ask for a restart).
+- `jarvis/plugins/tool/manage_mcp_server.py` — the disable branch now calls
+  `registry.stop_one(name)` for a live disable; a missing registry or a failing
+  stop still reports `requires_restart=True` honestly.
+
+**Verification.** `pytest tests/unit/mcp` → **132 passed** (5 new: start_one
+unregistered/idempotent, stop_one forgets + clears the stale error, stop_one
+no-op, stop_one keeps a client whose stop raised). `ruff` clean.
+
+**Next action.** Reconcile the tool adapters/capabilities too: a stopped or
+removed server must drop its `MCPToolAdapter` entries and publish one
+`BrainToolsChanged`, so no stale adapter is left for the lazy revive (Cycle 2)
+to paper over.
