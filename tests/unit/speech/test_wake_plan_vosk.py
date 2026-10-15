@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from jarvis.speech.wake_constants import resolve_vosk_model_path
+from jarvis.speech.wake_constants import resolve_vosk_model_path, resolve_vosk_model_paths
 from jarvis.speech.wake_phrase import resolve_wake_plan
 
 
@@ -217,3 +217,99 @@ def test_set_wake_plan_vosk_arms_the_provider(vosk_model_dir) -> None:
     assert pipe._openwakeword_enabled is True  # the detector loop is armed
     assert pipe._whisper_wake_enabled is False
     assert pipe._wake_reload_event.is_set()
+
+
+# --------------------------------------------------------------------------
+# An unreadable model folder must degrade, never crash the boot path
+# --------------------------------------------------------------------------
+# Forensic 2026-10-15 (live boot log): ``data\wake_models\vosk\en`` raised
+# ``PermissionError: [WinError 5] Access is denied`` inside ``_vosk_model_dir``.
+# Windows can refuse to ENUMERATE a folder that exists and whose parent is
+# readable (a stray deny ACE, a concurrent extraction, an AV/EDR lock). The
+# exception propagated out of ``resolve_vosk_model_path`` and ``resolve_wake_plan``
+# into ``desktop_app._start_speech_and_orb``, so the wake-model gate timed out
+# ("Heavy backend: wake-model gate timed out (12 s)") and the voice-ready
+# watchdog fired at 45 s -- one unreadable folder killed the whole wake plan.
+
+
+def _deny_listing(monkeypatch, denied_name: str) -> None:
+    """Make ``Path.iterdir()`` raise PermissionError for ONE directory name.
+
+    Only the named directory is affected; every other path keeps the real
+    ``iterdir``, so the surrounding layout still works.
+    """
+    real_iterdir = Path.iterdir
+
+    def _iterdir(self: Path):
+        if self.name == denied_name:
+            raise PermissionError(5, "Access is denied", str(self))
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _iterdir)
+
+
+def _make_language_dir(tmp_path, language: str) -> Path:
+    """Create an empty language folder in the Vosk store; returns the store root."""
+    store = tmp_path / "wake_models" / "vosk"
+    (store / language).mkdir(parents=True)
+    return store
+
+
+def test_unreadable_language_folder_resolves_to_none(tmp_path, monkeypatch) -> None:
+    """An unlistable language folder means "no model here", not a crash."""
+    monkeypatch.setenv("JARVIS__MEMORY__DATA_DIR", str(tmp_path))
+    _make_language_dir(tmp_path, "en")
+    _deny_listing(monkeypatch, "en")
+
+    assert resolve_vosk_model_path("en") is None
+
+
+def test_unreadable_language_folder_falls_through_to_stt_match(
+    tmp_path, monkeypatch
+) -> None:
+    """The wake plan must fall through to the next engine, as the chain promises.
+
+    A **missing** model already falls through (see
+    ``test_no_model_for_language_falls_back_to_stt_match``); an unreadable one must
+    behave the same instead of raising into the boot path.
+    """
+    monkeypatch.setenv("JARVIS__MEMORY__DATA_DIR", str(tmp_path))
+    _make_language_dir(tmp_path, "en")
+    _deny_listing(monkeypatch, "en")
+
+    plan = resolve_wake_plan(
+        _cfg(), local_whisper_available=True, language="en", vosk_available=True
+    )
+
+    assert plan.engine == "stt_match"
+    assert plan.vosk_model_path is None
+
+
+def test_unreadable_models_root_yields_no_models(tmp_path, monkeypatch) -> None:
+    """An unlistable store root must yield no models, not raise."""
+    monkeypatch.setenv("JARVIS__MEMORY__DATA_DIR", str(tmp_path))
+    _make_language_dir(tmp_path, "en")
+    _deny_listing(monkeypatch, "vosk")
+
+    assert resolve_vosk_model_paths("en") == []
+    assert resolve_vosk_model_path("auto") is None
+
+
+def test_unreadable_folder_is_logged_with_its_cause(tmp_path, monkeypatch, caplog) -> None:
+    """The degradation is logged with the folder and the OS error (AP-30).
+
+    A swallowed exception with no reason is exactly what the project forbids:
+    the operator must be able to see WHY the wake engine fell through.
+    """
+    monkeypatch.setenv("JARVIS__MEMORY__DATA_DIR", str(tmp_path))
+    _make_language_dir(tmp_path, "en")
+    _deny_listing(monkeypatch, "en")
+
+    with caplog.at_level("WARNING", logger="jarvis.speech.wake_constants"):
+        assert resolve_vosk_model_path("en") is None
+
+    assert caplog.records, "an unlistable model folder must be logged"
+    message = caplog.records[0].getMessage()
+    assert "en" in message
+    assert "PermissionError" in message
+

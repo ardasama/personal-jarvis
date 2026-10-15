@@ -16,10 +16,13 @@ Why this module exists:
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import unicodedata
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Five-layer enum — keep in lockstep with frontend/src/constants/wakeEngines.ts
@@ -243,6 +246,41 @@ def _vosk_models_root() -> Path:
     return Path(base) / "wake_models" / "vosk"
 
 
+def _safe_subdirs(directory: Path) -> list[Path]:
+    """Subdirectories of ``directory``, or ``[]`` when it cannot be listed.
+
+    The Vosk store lives under the user's data dir and is written by the setup
+    fetch. On Windows a folder can still refuse enumeration — a stray deny ACE,
+    a concurrent extraction, an AV/EDR lock — and ``iterdir()`` raises
+    ``PermissionError`` ([WinError 5]) or another ``OSError`` for that.
+
+    Forensic 2026-10-15 (live boot log): ``data\\wake_models\\vosk\\en`` raised
+    ``PermissionError`` inside ``_vosk_model_dir``, which propagated out of
+    ``resolve_vosk_model_path`` and ``resolve_wake_plan`` into
+    ``desktop_app._start_speech_and_orb``. The wake-model gate then timed out
+    ("Heavy backend: wake-model gate timed out (12 s)") and the voice-ready
+    watchdog fired at 45 s with the speech pipeline never signalling ready,
+    because one unreadable folder had crashed the whole wake plan.
+
+    An unreadable folder means "no model here", which is exactly what the
+    documented chain contract already promises for a missing model: fall
+    through to the next engine rather than fail the boot. The error is logged
+    with its cause, never swallowed silently (AP-30).
+    """
+    try:
+        return sorted(p for p in directory.iterdir() if p.is_dir())
+    except OSError as exc:
+        log.warning(
+            "wake-model store not listable: %s (%s: %s). Treating it as 'no "
+            "model in this folder'; the wake plan falls through to the next "
+            "engine instead of failing the boot path.",
+            directory,
+            type(exc).__name__,
+            exc,
+        )
+        return []
+
+
 def _vosk_model_dir(cand: Path) -> Path | None:
     """The extracted model dir inside a language folder, or None.
 
@@ -253,7 +291,7 @@ def _vosk_model_dir(cand: Path) -> Path | None:
     """
     if (cand / "am").is_dir() or (cand / "conf" / "model.conf").is_file():
         return cand
-    for sub in sorted(p for p in cand.iterdir() if p.is_dir()):
+    for sub in _safe_subdirs(cand):
         if (sub / "am").is_dir() or (sub / "conf" / "model.conf").is_file():
             return sub
     return None
@@ -274,7 +312,7 @@ def resolve_vosk_model_path(language: str | None) -> str | None:
     if lang and lang != "auto":
         candidates.append(root / lang)
     else:
-        candidates.extend(sorted(p for p in root.iterdir() if p.is_dir()))
+        candidates.extend(_safe_subdirs(root))
     for cand in candidates:
         if cand.is_dir():
             found = _vosk_model_dir(cand)
@@ -302,7 +340,7 @@ def resolve_vosk_model_paths(primary_language: str | None = None) -> list[str]:
     primary = resolve_vosk_model_path(primary_language)
     if primary is not None:
         out.append(primary)
-    for lang_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+    for lang_dir in _safe_subdirs(root):
         found = _vosk_model_dir(lang_dir)
         if found is not None and str(found) not in out:
             out.append(str(found))
