@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import re
 import sys
 from typing import Any
 
@@ -36,6 +37,12 @@ from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
 from jarvis.core.protocols import ExecutionContext, ToolResult
 from jarvis.safety.command_impact import DESTRUCTIVE, classify_command
 from jarvis.safety.explicit_intent import command_confirms_destruction
+
+#: A nested PowerShell started from our own wrapper as the FIRST word of the
+#: command. Only the BARE name matches: ``(?=\s|$)`` rejects ``powershell.extra``
+#: and ``powershellscript``, and an already-suffixed ``powershell.exe`` is left
+#: alone. An optional leading ``&`` (the call operator) is preserved.
+_NESTED_POWERSHELL = re.compile(r"(?i)^(?P<lead>\s*(?:&\s*)?)(?P<exe>powershell|pwsh)(?=\s|$)")
 
 if sys.platform == "win32":
     _SHELL_LABEL = "Windows PowerShell 5.1"
@@ -78,6 +85,40 @@ def _windows_subprocess_env() -> dict[str, str]:
     return env
 
 
+def _normalize_nested_shell_executable(command: str) -> str:
+    """Give a nested PowerShell the ``.exe`` suffix so resolution is unambiguous.
+
+    Forensic 2026-10-15 (Windows 11, reproduced deterministically): ``run_shell``
+    never returned for a command whose first word is a bare ``powershell`` --
+    ``powershell -Command "Write-Output hi"`` sat until the timeout and reported
+    "Timeout after 30.0s". The cause is not the command and not our wrapper:
+
+        where powershell       -> C:\\Windows\\System32\\powershell        (0 bytes!)
+        where powershell.exe   -> C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe
+
+    A zero-byte, extension-less ``powershell`` sits in ``System32`` and wins the
+    bare-name lookup, so the child is launched from a file that is not a program
+    and the call hangs. The same command with ``powershell.exe`` answers in
+    ~0.3 s. Measured (raw argv, 3 repetitions per variant): bare ``powershell``
+    3/3 hang; ``pwsh``/``powershell.exe`` fine; flat ``echo hi`` and ``cmd /c
+    echo hi`` unaffected.
+
+    Our own wrapper already launches ``powershell.exe`` explicitly for exactly
+    this reason; a nested shell written by the model may not. Fixing the name
+    here keeps the fix where every caller gets it, without rewriting the user's
+    arguments: only the executable token changes, the rest of the command
+    (flags, quoting, pipes) is passed through untouched, and classification plus
+    the whitelist/blacklist still run on the user's literal command.
+
+    Note the machine-level anomaly (the stray ``System32\\powershell``) is a
+    system file: it is reported, never removed.
+    """
+    match = _NESTED_POWERSHELL.match(command)
+    if match is None:
+        return command
+    return f"{match.group('lead')}{match.group('exe')}.exe{command[match.end():]}"
+
+
 def _powershell_argv(command: str) -> list[str]:
     """Build the ``powershell.exe`` invocation for ``command``.
 
@@ -101,7 +142,7 @@ def _powershell_argv(command: str) -> list[str]:
         "$ProgressPreference = 'SilentlyContinue'\n"
         "$ErrorActionPreference = 'Stop'\n"
         "try {\n"
-        "  & { " + command + " }\n"
+        "  & { " + _normalize_nested_shell_executable(command) + " }\n"
         "} catch {\n"
         "  [Console]::Error.WriteLine($_.ToString())\n"
         "  exit 1\n"
@@ -208,6 +249,7 @@ class RunShellTool:
             if sys.platform == "win32":
                 proc = await asyncio.create_subprocess_exec(
                     *_powershell_argv(command),
+                    stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
@@ -219,6 +261,7 @@ class RunShellTool:
                     "/bin/sh",
                     "-c",
                     command,
+                    stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,

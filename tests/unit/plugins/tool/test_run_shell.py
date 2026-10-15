@@ -17,7 +17,11 @@ import sys
 
 import pytest
 
-from jarvis.plugins.tool.run_shell import RunShellTool, _windows_subprocess_env
+from jarvis.plugins.tool.run_shell import (
+    RunShellTool,
+    _normalize_nested_shell_executable,
+    _windows_subprocess_env,
+)
 
 windows_only = pytest.mark.skipif(
     sys.platform != "win32", reason="Windows PowerShell semantics"
@@ -25,6 +29,54 @@ windows_only = pytest.mark.skipif(
 posix_only = pytest.mark.skipif(
     sys.platform == "win32", reason="POSIX sh semantics"
 )
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        # A bare first-word PowerShell gains the suffix.
+        ('powershell -Command "hi"', 'powershell.exe -Command "hi"'),
+        ('  powershell -Command "hi"', '  powershell.exe -Command "hi"'),
+        ('& powershell -Command "hi"', '& powershell.exe -Command "hi"'),
+        ('PowerShell -Command "hi"', 'PowerShell.exe -Command "hi"'),
+        ("pwsh -File x.ps1", "pwsh.exe -File x.ps1"),
+        # Already suffixed, or not a bare PowerShell name: untouched.
+        ('powershell.exe -Command "hi"', 'powershell.exe -Command "hi"'),
+        ("pwsh.exe -File x.ps1", "pwsh.exe -File x.ps1"),
+        ('powershell.extra -Command "hi"', 'powershell.extra -Command "hi"'),
+        ("powershellscript cmd", "powershellscript cmd"),
+        ('"C:\\x\\powershell.exe" -Command "hi"', '"C:\\x\\powershell.exe" -Command "hi"'),
+        ('Get-Process | powershell -Command "hi"', 'Get-Process | powershell -Command "hi"'),
+        ('echo powershell -Command "hi"', 'echo powershell -Command "hi"'),
+        # Non-PowerShell commands are never rewritten.
+        ("echo hi", "echo hi"),
+        ("cmd /c echo hi", "cmd /c echo hi"),
+    ],
+)
+def test_bare_powershell_first_word_gains_the_exe_suffix(
+    command: str, expected: str
+) -> None:
+    """A bare ``powershell`` must become ``powershell.exe`` before launch.
+
+    Forensic 2026-10-15 (Windows 11, deterministic): a zero-byte,
+    extension-less ``powershell`` in ``System32`` wins the bare-name lookup, so
+    a nested ``powershell -Command "..."`` was launched from a file that is not
+    a program and ``run_shell`` hung to its timeout ("Timeout after 30.0s").
+    ``where powershell`` -> ``System32\\powershell`` (0 bytes);
+    ``where powershell.exe`` -> ``WindowsPowerShell\\v1.0\\powershell.exe``.
+    With the suffix the same command answers in under a second (measured 3/3).
+    """
+    assert _normalize_nested_shell_executable(command) == expected
+
+
+def test_non_powershell_commands_are_byte_identical() -> None:
+    """No rewrite may touch a command that is not a bare nested PowerShell."""
+    for command in (
+        "Get-ChildItem -Recurse | Select-Object Name",
+        "python -c \"print('x')\"",
+        "git status --short",
+    ):
+        assert _normalize_nested_shell_executable(command) == command
 
 
 @pytest.mark.asyncio
