@@ -302,5 +302,14 @@ class ManageMcpServerTool:
             return False
         try:
             return name in set(registry.active_names())
-        except Exception:  # noqa: BLE001
-            return False
+        except Exception as exc:  # noqa: BLE001
+            # A registry that cannot answer must not be read as "not running":
+            # that silently turns a needed restart into a false live success.
+            # Log the cause (AP-30) and fall back to the conservative "running".
+            log.warning(
+                "manage-mcp-server: registry introspection failed for %r (%s); "
+                "assuming still running so the caller asks for a restart",
+                name,
+                exc,
+            )
+            return True

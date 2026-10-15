@@ -156,6 +156,22 @@ class MCPRegistry:
         """Mapping of name → MCPClient for all currently running clients."""
         return dict(self._clients)
 
+    def active_names(self) -> list[str]:
+        """Names of all currently running MCP clients.
+
+        Public introspection, because ``jarvis.plugins.tool.manage_mcp_server``
+        must decide whether an enable/disable took effect live. Without it the
+        call raised ``AttributeError``, the tool's ``except Exception`` swallowed
+        it, and every enable reported "restart required" even when the server had
+        actually started — or, on the disable path, claimed the drop had applied
+        live when it had not. See
+        ``docs/reports/jarvis-mcp-deep-dive-2026-08-08.md`` §3 item 1.
+
+        Delegates to :meth:`active_clients` so the client map keeps exactly one
+        read path; the caller list and the client map can never disagree.
+        """
+        return list(self.active_clients().keys())
+
     async def start_enabled(self, enabled_names: list[str]) -> None:
         """Start all specified servers in parallel. Errors are logged and stored
         per server in ``self._errors``, but the overall start is not aborted —

@@ -81,6 +81,35 @@ def test_registry_active_clients_initially_empty() -> None:
     assert reg.active_clients() == {}
 
 
+def test_registry_active_names_agrees_with_active_clients() -> None:
+    """``active_names()`` is the live-state introspection the manage-mcp-server
+    tool reads; it must never disagree with ``active_clients()``.
+
+    Regression guard for the audit finding in
+    ``docs/reports/jarvis-mcp-deep-dive-2026-08-08.md`` §3 item 1: the tool
+    called a method that did not exist, the AttributeError was swallowed, and
+    every MCP enable reported "restart required" even when the server had
+    actually started live.
+    """
+    reg = MCPRegistry()
+    assert reg.active_names() == []
+    assert reg.active_names() == list(reg.active_clients().keys())
+
+    reg._clients["filesystem"] = object()  # type: ignore[assignment]
+    reg._clients["notion"] = object()  # type: ignore[assignment]
+    assert set(reg.active_names()) == {"filesystem", "notion"}
+    assert set(reg.active_names()) == set(reg.active_clients().keys())
+
+
+def test_registry_active_names_is_a_copy_not_a_view() -> None:
+    """Mutating the returned list must not touch the registry's client map."""
+    reg = MCPRegistry()
+    reg._clients["github"] = object()  # type: ignore[assignment]
+    names = reg.active_names()
+    names.append("injected")
+    assert reg.active_names() == ["github"]
+
+
 @pytest.mark.asyncio
 async def test_registry_stop_all_is_safe_when_empty() -> None:
     reg = MCPRegistry()
