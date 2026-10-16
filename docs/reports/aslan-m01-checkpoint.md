@@ -188,3 +188,91 @@ live log are `Ollama llama-server binary not found`, invalid Grok/OpenAI keys
 and Gemini free-tier quota — trace the fallback chain so a missing or failing
 provider degrades across families (AP-22) instead of surfacing the last raw
 error.
+
+## Cycles 6-10 - Waves 0/A/B/C of the master plan  (IMPLEMENTED, each TESTED)
+
+Branch `agent/mcp-registry-active-names`, 10 commits total, nothing pushed
+(`origin/main` is not available on this box). Every edit took a uniquely named
+backup first; no file was deleted. Test commands run through the uv overlay
+against the user's interpreter - nothing was installed into `.venv`.
+
+### Cycle 6 - local cold-start connect retry   (`8f50534`)
+A local server that unloaded its model answers `/api/tags` in 113 ms but needs
+seconds to load on the first real request. The shared 2 s connect budget then
+read as "Request timed out." and the whole chain failed (live 2026-10-16: the
+chat turn was dead in 2.004 s while the server was healthy).
+`_openai_base` now retries ONCE with a longer connect timeout when the failure
+is a connect timeout AND the endpoint is local (loopback/LAN/.local). Cloud
+chains keep fast-failing. **Verified:** 21 tests, `ruff` clean.
+
+### Cycle 7 - the size, the reason   (`83ef3c9`, `cfb7c79`)
+* `_fit_tools_to_brain` records a pre-flight finding (`used, window`) when the
+  prompt + history alone exceed the declared window; the chain's error handler
+  consumes it once and, for a GENERIC `call_fail`/`init_fail` only, classifies
+  the failure as `context_overflow` - the spoken cause and the diagnostic then
+  name the size, not a network nobody broke. A concrete classification
+  (missing_key, bad_key, rate_limit) still wins. **Verified:** +10 tests (33),
+  233 neighbouring tests.
+* The Flash-Brain picker said "has no Flash adapter" for TWO different reasons;
+  a primary on the realtime voice key has an adapter and merely defers. It also
+  picked the first family with a PRESENT credential, even one the brain had
+  just seen 401 (live: flash work landed on 'grok' = "User not found."). The
+  picker now names the true reason and defers a family with a live credential
+  failure - probe-free, self-healing via the ledger's fingerprint, and still
+  the LAST resort. **Verified:** 44 ack tests, 85 integration/contract.
+
+### Cycle 8 - a measured tool verdict outranks a declared one   (`679d113`)
+`/api/show` DECLARES capabilities. New `jarvis/brain/tool_probe_store.py` holds
+what a probe MEASURED per (provider, model): atomic write, tolerant read (a
+missing/corrupt file is "no verdict", never a wrong yes), evidence + digest so
+a re-pull invalidates it. The Ollama adapter consults it at all three tool gates
+and a verdict wins over the declaration in BOTH directions; no verdict leaves
+the declaration standing (fail-open). Opt-in probe:
+`scripts/check_local_models.py --tool-probe` - ONE native `/api/chat` with a fake
+`get_weather` tool and `keep_alive: 0`. **Verified:** 30 new tests, plugins/brain
+256, `ruff` clean.
+
+**Live measurements recorded (data/state/model_tool_probe.json):**
+
+| download | verdict | evidence |
+|---|---|---|
+| `qwen3.5:4b` | capable | called `get_weather` |
+| `qwen3.5:4b-8k` | capable | called `get_weather` |
+| `deepseek-r1:8b-16k` | NOT capable | confabulation: "please hold on while I fetch ... from the get_weather tool" |
+| `qwen2.5-coder:7b` | NOT capable | wrote the call as text (`{"name": "get_weather", ...}` in content) |
+| `qwen2.5-coder:7b-16k` | NOT capable | same |
+
+### Cycle 9 - connected servers stay reachable   (`6df3cd5`)
+A server's schemas are the trim's first victims: live 2026-10-16 the trim hid 92
+of 92 tools ("budget for tools 0") and a whole connected server became
+unreachable to save a few thousand tokens. `_fit_tools_to_brain` now folds FIRST:
+each server's tools collapse into one `MCPToolFacade`, largest group first,
+stopping the moment the request fits. The facade names the member tool and
+passes its arguments to the real adapter; it carries the HIGHEST member tier and
+resolves the selected member's own per-call hook, so it can never weaken a
+safety decision. Conservative by construction - folding may only WIN
+capabilities: a surface that fits unfolded is untouched, and a surface that fits
+neither way keeps the previous trim of the ORIGINAL mapping.
+**Verified:** 14 new facade tests; a combined run of the brain + script +
+plugin suites = 328 passed; 0 new lint (the 30 `ruff` errors in `manager.py`
+predate this work, confirmed by diff-overlap analysis).
+
+### Cycle 10 - score a local model in code before trusting it   (`059fba4`)
+New `jarvis/local_models/eval_suite.py`: five deterministic cases
+(exact_reply, arithmetic, structured_json, three_lines, context_recall) with
+pure-Python scorers - no judge model, no network. The sixth dimension (tool
+calling) is READ from `tool_probe_store`, so one measurement has one home.
+Reports land in `data/state/model_eval.json`; a case that could not be asked is
+recorded as unknown and never counts against the model.
+Opt-in: `--eval` / `--eval-for TAG[,TAG]`. **Verified:** 28 new tests,
+`ruff` clean.
+
+### Next action
+1. Live verification with the app restarted (Wave D): the changed brain path
+   under a real turn, plus the probe/eval flags end to end.
+2. Wave F: the code-level self-modification bridge (propose -> mission worktree
+   -> tests -> `diff_summary` -> critic -> land). The config half is already
+   implemented and green (725 tests); the mission engine is green (1754 tests).
+   The remaining work is the BRIDGE, not new machinery.
+3. Push/land: 10 commits sit on the branch; `origin/main` is not available
+   locally, so landing needs the user's decision.
