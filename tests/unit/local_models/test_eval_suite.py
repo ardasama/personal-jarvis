@@ -27,11 +27,36 @@ def _case(name: str) -> eval_suite.EvalCase:
     return next(case for case in eval_suite.CASES if case.name == name)
 
 
+async def _noop_unload(root: str, model: str) -> None:
+    """The suite unloads once at the end; tests must not reach a server."""
+
+
 def test_case_names_are_unique_and_cover_the_six_dimensions() -> None:
     names = [case.name for case in eval_suite.CASES]
     assert len(names) == len(set(names)) == len(eval_suite.CASE_NAMES)
     assert len(names) >= 5
     assert all(case.prompt.strip() for case in eval_suite.CASES)
+
+
+@pytest.mark.asyncio
+async def test_the_model_is_unloaded_once_after_the_suite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Five cases must not pay five cold loads, and must not hold the RAM."""
+    unloaded: list[str] = []
+
+    async def _ask(root: str, model: str, prompt: str) -> tuple[str, str]:
+        return "OK", ""
+
+    async def _unload(root: str, model: str) -> None:
+        unloaded.append(model)
+
+    monkeypatch.setattr(eval_suite, "_ask", _ask)
+    monkeypatch.setattr(eval_suite, "_unload", _unload)
+
+    await eval_suite.run_model_eval("http://127.0.0.1:11434", "m")
+
+    assert unloaded == ["m"]
 
 
 @pytest.mark.parametrize(
@@ -79,6 +104,7 @@ async def test_a_case_that_cannot_be_asked_is_unknown_never_a_failure(
         return "OK", ""
 
     monkeypatch.setattr(eval_suite, "_ask", _ask)
+    monkeypatch.setattr(eval_suite, "_unload", _noop_unload)
 
     results = await eval_suite.run_model_eval("http://127.0.0.1:11434", "m")
 
@@ -96,6 +122,7 @@ async def test_an_empty_reply_scores_false_not_unknown(
         return "", ""
 
     monkeypatch.setattr(eval_suite, "_ask", _ask)
+    monkeypatch.setattr(eval_suite, "_unload", _noop_unload)
 
     results = await eval_suite.run_model_eval("http://127.0.0.1:11434", "m")
 

@@ -33,6 +33,10 @@ log = logging.getLogger(__name__)
 EVAL_FILE_NAME = "model_eval.json"
 _STORE_VERSION = 1
 
+#: Keep the model resident across the five cases: five cold loads would cost
+#: more than the eval itself (live 2026-10-16: an 8B load is ~85 s).
+_KEEP_ALIVE = "10m"
+
 
 @dataclass(frozen=True)
 class EvalCase:
@@ -235,14 +239,20 @@ def _read_runtime_capability(provider: str, model: str) -> bool | None:
 
 
 async def _ask(root: str, model: str, prompt: str) -> tuple[str, str]:
-    """One native ``/api/chat`` turn. Returns ``(text, error)``."""
+    """One native ``/api/chat`` turn. Returns ``(text, error)``.
+
+    The model is kept ALIVE across the cases (``_KEEP_ALIVE``): five cases are
+    five requests, and unloading after each would pay five cold loads (live
+    2026-10-16: an 8B load is ~85 s). ``run_model_eval`` unloads once, at the
+    end.
+    """
     import httpx
 
     body: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "keep_alive": 0,
+        "keep_alive": _KEEP_ALIVE,
         "options": {"temperature": 0},
     }
     try:
@@ -253,6 +263,20 @@ async def _ask(root: str, model: str, prompt: str) -> tuple[str, str]:
             return _text_of(response.json()), ""
     except Exception as exc:  # noqa: BLE001 — an unreachable server is a result
         return "", str(exc)[:200]
+
+
+async def _unload(root: str, model: str) -> None:
+    """Best-effort immediate unload: a probe must not sit on the person's RAM."""
+    import httpx
+
+    try:
+        timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            await client.post(
+                f"{root}/api/generate", json={"model": model, "keep_alive": 0}
+            )
+    except Exception:  # noqa: BLE001 — Ollama's idle timeout is the backstop
+        log.debug("eval_suite: unload of %s failed", model, exc_info=True)
 
 
 async def run_model_eval(root: str, model: str) -> dict[str, bool | None]:
@@ -270,6 +294,7 @@ async def run_model_eval(root: str, model: str) -> dict[str, bool | None]:
             results[case.name] = None
             continue
         results[case.name] = bool(case.check(text))
+    await _unload(root, model)
     return results
 
 
