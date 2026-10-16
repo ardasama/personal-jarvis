@@ -47,6 +47,13 @@ What it checks
                      claim; the runtime gate trusts a measurement. Live
                      2026-10-16: a model declared tools, never called one,
                      fabricated a result and took ~85 s per turn.
+8. **model-eval**  — opt-in (``--eval``): five deterministic cases per model
+                     (exact reply, arithmetic, JSON shape, line constraint,
+                     context recall), scored in code with no judge model. The
+                     sixth dimension (tool calling) is read from the probe's
+                     verdict store. ``--eval-for TAG`` names the downloads;
+                     without it, the models currently assigned to roles are
+                     scored.
 
 Usage
 -----
@@ -54,6 +61,7 @@ Usage
     python scripts/check_local_models.py --json          # machine-readable
     python scripts/check_local_models.py --server URL    # a remote Ollama box
     python scripts/check_local_models.py --tool-probe    # measure tool calling
+    python scripts/check_local_models.py --eval --eval-for qwen3.5:4b,deepseek-r1:8b
 
 Exit code is 0 when nothing FAILED (warnings are fine — an unreadable GPU is a
 normal machine, not a broken one) and 1 when at least one check failed.
@@ -64,14 +72,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import platform
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 # Run from a source checkout without installing.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+log = logging.getLogger(__name__)
 
 OK = "PASS"
 WARN = "WARN"
@@ -493,8 +505,83 @@ async def _tool_probe(root: str) -> Check:
     )
 
 
-async def run(server: str | None, *, tool_probe: bool = False) -> list[Check]:
-    """Every check, in the order a reader wants them."""
+async def _model_eval(root: str, cfg: Any, explicit: Sequence[str]) -> Check:
+    """Score downloads on five deterministic cases (the sixth is the probe's).
+
+    Opt-in (``--eval``) because every case is a real request: it loads the
+    model. ``--eval-for`` names the downloads; without it, the models currently
+    assigned to roles are scored — the question "is the local model I am using
+    actually good enough?" is the one worth answering.
+    """
+    from jarvis.brain import tool_probe_store
+    from jarvis.local_models import eval_suite
+
+    models = [m.strip() for m in explicit if str(m).strip()]
+    if not models:
+        try:
+            from jarvis.brain import ollama_roles
+
+            states, _error = await ollama_roles.list_roles(root, cfg)
+            models = [str(s.current).strip() for s in states if str(s.current or "").strip()]
+        except Exception:  # noqa: BLE001 — a failed lookup is not a crash
+            log.debug("model-eval: role lookup failed", exc_info=True)
+            models = []
+        models = list(dict.fromkeys(models))
+    if not models:
+        return Check(
+            "model-eval",
+            WARN,
+            "No model chosen: no local model is assigned to a role, so pass "
+            "--eval-for TAG (comma-separated) to score specific downloads.",
+            {"server": root},
+        )
+
+    rows: dict[str, Any] = {}
+    for model in models:
+        cases = await eval_suite.run_model_eval(root, model)
+        eval_suite.write_report("ollama", model, cases=cases)
+        rows[model] = {
+            "passed": sum(1 for value in cases.values() if value is True),
+            "attempted": sum(1 for value in cases.values() if value is not None),
+            "cases": cases,
+            "tool_calling": tool_probe_store.verdict_for("ollama", model),
+            "tool_reason": tool_probe_store.reason_for("ollama", model),
+        }
+    facts = {"server": root, "models": rows, "store": str(eval_suite.report_path())}
+
+    def _line(model: str) -> str:
+        row = rows[model]
+        tool = row["tool_calling"]
+        tool_text = "unprobed" if tool is None else ("yes" if tool else "no")
+        return f"{model} {row['passed']}/{row['attempted']} (tools: {tool_text})"
+
+    summary = "; ".join(_line(model) for model in models)
+    full = all(
+        row["passed"] == row["attempted"] and row["attempted"] == len(eval_suite.CASES)
+        for row in rows.values()
+    )
+    if full:
+        return Check("model-eval", OK, f"Every case passed — {summary}.", facts)
+    return Check(
+        "model-eval",
+        WARN,
+        f"Capability score — {summary}. A low score is a reason not to run a "
+        f"model as a brain, not a broken install.",
+        facts,
+    )
+
+
+async def run(
+    server: str | None,
+    *,
+    tool_probe: bool = False,
+    eval_models: Sequence[str] | None = None,
+) -> list[Check]:
+    """Every check, in the order a reader wants them.
+
+    ``eval_models`` is ``None`` unless the operator asked for an eval run, so
+    neither the probe nor the eval loads a model by accident.
+    """
     from jarvis.brain.ollama_pull import server_root
     from jarvis.core import config as config_mod
 
@@ -508,6 +595,8 @@ async def run(server: str | None, *, tool_probe: bool = False) -> list[Check]:
     checks.append(_autostart(cfg))
     if tool_probe:
         checks.append(await _tool_probe(root))
+    if eval_models is not None:
+        checks.append(await _model_eval(root, cfg, eval_models))
     return checks
 
 
@@ -524,9 +613,29 @@ def main() -> int:
             "prints it); off by default"
         ),
     )
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help=(
+            "score downloads on five deterministic capability cases (loads the "
+            "model; one request per case); without --eval-for the models "
+            "assigned to roles are scored"
+        ),
+    )
+    parser.add_argument(
+        "--eval-for",
+        default="",
+        help="comma-separated download tags to score with --eval",
+    )
     args = parser.parse_args()
 
-    checks = asyncio.run(run(args.server, tool_probe=args.tool_probe))
+    eval_models: list[str] | None = None
+    if args.eval or args.eval_for.strip():
+        eval_models = [tag.strip() for tag in args.eval_for.split(",") if tag.strip()]
+
+    checks = asyncio.run(
+        run(args.server, tool_probe=args.tool_probe, eval_models=eval_models)
+    )
 
     if args.json:
         print(json.dumps([asdict(c) for c in checks], indent=2))
