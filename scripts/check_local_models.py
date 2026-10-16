@@ -571,6 +571,90 @@ async def _model_eval(root: str, cfg: Any, explicit: Sequence[str]) -> Check:
     )
 
 
+async def _context_fit(root: str) -> Check:
+    """Downloads that will ask for MORE memory than this machine has.
+
+    Live 2026-10-16: ``deepseek-r1:8b`` answered every request with HTTP 500 —
+    ``llama-server`` died loading it ("cudaMalloc failed ... failed to allocate
+    buffer for kv cache", a 3.76 GB KV buffer), because the tag declares NO
+    ``num_ctx`` and therefore runs at the model's NATIVE window. Its own
+    ``-16k`` variant caps the context at 16384 and runs fine on the same box.
+
+    This asks only for facts the server already reports (``size_bytes``,
+    ``context_length``, the Modelfile ``parameters``) plus the accelerator probe
+    the fit verdicts already use, so an install learns the risk BEFORE a turn
+    dies. It is an ESTIMATE, and the wording says so.
+    """
+    from jarvis.brain import ollama_inventory as inventory
+    from jarvis.hardware.detection import usable_accelerator_gb
+
+    accel_gb, source = usable_accelerator_gb()
+    if accel_gb <= 0:
+        return Check(
+            "context-fit",
+            WARN,
+            "Not checked: no accelerator this probe can read, so the memory a "
+            "download would need cannot be compared against anything. The "
+            "system-RAM rule applies instead.",
+            {"accelerator_source": source},
+        )
+    try:
+        snapshot = await inventory.cached_snapshot(root)
+    except Exception as exc:  # noqa: BLE001 — report, never raise out of a preflight
+        return Check("context-fit", WARN, f"The server at {root} did not answer: {exc}", {})
+
+    budget_bytes = accel_gb * (1024**3)
+    risky: list[dict[str, Any]] = []
+    capped: list[str] = []
+    for model in snapshot.models:
+        params = model.parameters or ""
+        if "num_ctx" in params:
+            capped.append(model.name)
+            continue
+        native = int(model.context_length or 0)
+        # A small file cannot exhaust a card by itself; a big file at a native
+        # 32k+ window is exactly the shape that dies at load.
+        if native >= 32_768 and model.size_bytes >= 0.6 * budget_bytes:
+            risky.append(
+                {
+                    "model": model.name,
+                    "size_gb": round(model.size_bytes / (1024**3), 1),
+                    "native_context": native,
+                }
+            )
+    facts = {
+        "server": root,
+        "accelerator_gb": round(accel_gb, 1),
+        "accelerator_source": source,
+        "capped_by_num_ctx": capped,
+        "at_risk": risky,
+    }
+    if risky:
+        worst = ", ".join(
+            f"{row['model']} ({row['size_gb']} GB, native {row['native_context']}-token "
+            f"context, no num_ctx)"
+            for row in risky
+        )
+        return Check(
+            "context-fit",
+            WARN,
+            f"{len(risky)} download(s) declare no num_ctx and are large enough to "
+            f"exhaust the {accel_gb:.1f} GB card while loading: {worst}. A load "
+            f"failure looks like HTTP 500 ('out of memory ... kv cache') and "
+            f"reaches the chain as a size problem, not a network one. The fix is "
+            f"a capped-context variant or a Modelfile with num_ctx; re-run after "
+            f"changing it.",
+            facts,
+        )
+    return Check(
+        "context-fit",
+        OK,
+        f"No download asks for more context than this {accel_gb:.1f} GB card can "
+        f"hold ({len(capped)} capped by num_ctx).",
+        facts,
+    )
+
+
 async def run(
     server: str | None,
     *,
@@ -592,6 +676,7 @@ async def run(
     checks.append(await _inventory(root))
     checks.append(await _roles(root, cfg))
     checks.append(await _card_parity(root))
+    checks.append(await _context_fit(root))
     checks.append(_autostart(cfg))
     if tool_probe:
         checks.append(await _tool_probe(root))
