@@ -11870,6 +11870,10 @@ class BrainManager:
         # the whole chain fails. Pattern: (provider, model, kind, detail).
         # kind ∈ {"rate_limit", "missing_key", "skipped_cooldown", "init_fail",
         #         "call_fail"}
+        # The turn's own words, for the per-turn CHARACTER (jarvis/persona): the
+        # dispatcher reads it to pick the ingredients, so a code turn and a plain
+        # question never get the same person. Cleared at the turn's end.
+        self._turn_text = user_text
         provider_errors: list[tuple[str, str, str, str]] = []
 
         # B5 Agent C: wiki context injection — run once before the provider
@@ -12613,6 +12617,8 @@ class BrainManager:
         # B5 Agent C: reset per-turn wiki suffix regardless of outcome so
         # stale context cannot leak into the next voice turn.
         self._wiki_context_suffix = ""
+        # ...and the same for the turn's words (the next turn sets its own).
+        self._turn_text = ""
 
         if screen_context.has_image and not vision_capable_seen:
             from jarvis.screen_context.intent import (  # noqa: PLC0415
