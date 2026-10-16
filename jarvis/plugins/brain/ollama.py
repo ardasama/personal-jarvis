@@ -176,12 +176,45 @@ class OllamaBrain:
         if self._model:
             from jarvis.brain.model_catalog import model_capabilities
 
-            self.supports_tools = model_capabilities("ollama", self._model)["tools"] is not False
+            self.supports_tools = self._tool_capability(
+                self._model,
+                model_capabilities("ollama", self._model)["tools"] is not False,
+            )
             # Tool fitting and history compaction happen before complete().
             # Publish an explicit local context limit before either budgets.
             options = self._model_options(self._model)
             if options is not None and options.num_ctx:
                 self.context_window = options.num_ctx
+
+    def _tool_capability(self, name: str, declared: bool) -> bool:
+        """Whether ``name`` may be handed tools.
+
+        The model's own ``/api/show`` declaration is the default. A MEASURED
+        probe verdict wins over it (AP-21: capability by behaviour, never by
+        claim). Live 2026-10-16: a model declared ``tools``, never emitted a
+        tool call, and fabricated a tool result — the declaration alone kept
+        handing it tools. No verdict recorded means the declaration stands.
+        """
+        try:
+            from jarvis.brain.tool_probe_store import verdict_for
+
+            measured = verdict_for("ollama", name)
+        except Exception:  # noqa: BLE001 — a missing verdict is not a failure
+            log.debug(
+                "ollama: tool-probe verdict lookup failed for %s", name, exc_info=True
+            )
+            measured = None
+        if measured is None:
+            return declared
+        if measured is not declared:
+            log.info(
+                "ollama: %s declares tools=%s but a real probe measured tools=%s "
+                "— trusting the measurement.",
+                name,
+                declared,
+                measured,
+            )
+        return measured
 
     def can_call_tools(self) -> bool:
         return self.supports_tools
@@ -244,7 +277,9 @@ class OllamaBrain:
             if need_tools:
                 caps = await self._capabilities(self._model, self._resolve_root())
                 if caps is not None:
-                    self.supports_tools = "tools" in caps
+                    self.supports_tools = self._tool_capability(
+                        self._model, "tools" in caps
+                    )
                     if not self.supports_tools:
                         raise RuntimeError(
                             f"The selected Ollama model '{self._model}' does not support tools. "
@@ -290,7 +325,7 @@ class OllamaBrain:
             if caps is not None:
                 if "completion" not in caps:
                     continue
-                if need_tools and "tools" not in caps:
+                if need_tools and not self._tool_capability(name, "tools" in caps):
                     continue
                 # Vision is the one requirement that must NOT fail open: an
                 # unprobeable model is skipped rather than handed a screenshot

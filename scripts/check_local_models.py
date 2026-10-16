@@ -13,8 +13,12 @@ run live. Apple Silicon and AMD are, as of 2026-08-28, untested on metal.
 This script is the drill that closes that gap without asking anyone to read
 code: it runs the whole checklist against THIS machine and prints one verdict
 per check, so a Mac or an AMD box can be reported with evidence instead of a
-guess. It never installs, never pulls, never loads a model into memory and
-never writes a file — the worst it can do is fail to reach a server.
+guess. It never installs and never pulls. By default it also never loads a
+model into memory and never writes a file — the worst it can do is fail to
+reach a server. The opt-in ``--tool-probe`` is the one exception, and it says
+so: it loads ONE model at a time (``keep_alive: 0`` unloads it right after) to
+measure whether it really calls tools, and records that verdict for the
+runtime gate.
 
 What it checks
 --------------
@@ -38,12 +42,18 @@ What it checks
                      reported as "Not downloaded".
 6. **autostart**   — whether this install would bring the server up on its own,
                      which is what "a new PC needs no manual step" means.
+7. **tool-probe**  — opt-in (``--tool-probe``): whether each model that
+                     DECLARES ``tools`` actually calls one. A declaration is a
+                     claim; the runtime gate trusts a measurement. Live
+                     2026-10-16: a model declared tools, never called one,
+                     fabricated a result and took ~85 s per turn.
 
 Usage
 -----
     python scripts/check_local_models.py
     python scripts/check_local_models.py --json          # machine-readable
     python scripts/check_local_models.py --server URL    # a remote Ollama box
+    python scripts/check_local_models.py --tool-probe    # measure tool calling
 
 Exit code is 0 when nothing FAILED (warnings are fine — an unreadable GPU is a
 normal machine, not a broken one) and 1 when at least one check failed.
@@ -273,7 +283,187 @@ def _autostart(cfg: Any) -> Check:
     )
 
 
-async def run(server: str | None) -> list[Check]:
+# ---------------------------------------------------------------------------
+# Opt-in behavioural tool probe (``--tool-probe``)
+# ---------------------------------------------------------------------------
+
+#: The one fake tool the probe offers. Its answer is knowable only by CALLING
+#: it, so a reply that states weather values without a call is a fabrication.
+_PROBE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Return the current weather for one city.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "The city name"}
+            },
+            "required": ["city"],
+        },
+    },
+}
+
+_PROBE_PROMPT = (
+    "What is the weather in Istanbul right now? Call the get_weather tool."
+)
+
+#: Wordings that betray a RESULT nobody returned: the model answered about the
+#: tool or its data without ever emitting a tool call. Live 2026-10-16: an
+#: answer of "According to the weather tool … partly sunny 24°C" with no call.
+_CONFABULATION_MARKERS: tuple[str, ...] = (
+    "get_weather",
+    "weather tool",
+    "according to the",
+    "the tool returned",
+    "tool result",
+    "tool call",
+    "°c",
+    "celsius",
+    "sunny",
+    "cloudy",
+    "temperature",
+    "wetter",
+    "sonnig",
+)
+
+def classify_probe_response(payload: Any) -> tuple[bool | None, str, str]:
+    """What one native ``/api/chat`` answer says about tool calling.
+
+    Returns ``(capable, reason, evidence)``. ``capable=None`` means the answer
+    proves NOTHING (an error shape, or an empty reply) — a caller must never
+    record that as a verdict, because the runtime gate reads a recorded
+    ``False`` as "do not hand this model tools".
+    """
+    message = payload.get("message") if isinstance(payload, dict) else None
+    if not isinstance(message, dict):
+        return None, "no_message", ""
+    calls = message.get("tool_calls")
+    if isinstance(calls, list) and calls:
+        name = ""
+        first = calls[0]
+        if isinstance(first, dict):
+            function = first.get("function")
+            if isinstance(function, dict):
+                name = str(function.get("name") or "")
+        return True, "tool_calls", f"called {name or 'a tool'}"
+    text = str(message.get("content") or "").strip()
+    if not text:
+        return None, "empty_reply", ""
+    lowered = text.lower()
+    if any(marker in lowered for marker in _CONFABULATION_MARKERS):
+        return (
+            False,
+            "confabulation",
+            f"stated a tool result without calling: {text[:200]}",
+        )
+    return False, "no_tool_call", f"answered without calling a tool: {text[:200]}"
+
+
+async def _probe_one(root: str, model: str) -> tuple[bool | None, str, str]:
+    """Send ONE real request carrying the fake tool and read the answer."""
+    import httpx
+
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": _PROBE_PROMPT}],
+        "tools": [_PROBE_TOOL],
+        "stream": False,
+        # Unload as soon as the answer is in: a probe must not sit on the
+        # person's RAM, and the next turn should pay a cold load deliberately.
+        "keep_alive": 0,
+        "options": {"temperature": 0},
+    }
+    try:
+        # Read generously: a cold local load of a big model can take minutes
+        # (live: ~85 s for an 8B Q4). The CONNECT stays short, because a
+        # stopped server must not look like a slow one.
+        timeout = httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=30.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(f"{root}/api/chat", json=body)
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:  # noqa: BLE001 — an unreachable server is a verdict
+        return None, "probe_failed", str(exc)[:200]
+    return classify_probe_response(payload)
+
+
+async def _tool_probe(root: str) -> Check:
+    """Measure, per tool-DECLARING download, whether it really calls a tool.
+
+    Opt-in because it loads a model (time and RAM). The verdict is recorded in
+    ``jarvis/brain/tool_probe_store.py``, which the runtime gate reads — so a
+    model that only CLAIMS tool support stops being handed tools, and a
+    corrected model is picked up the moment it is re-probed.
+    """
+    from jarvis.brain import ollama_inventory as inventory
+    from jarvis.brain import tool_probe_store
+
+    try:
+        snapshot = await inventory.cached_snapshot(root)
+    except Exception as exc:  # noqa: BLE001 — report, never raise out of a preflight
+        return Check("tool-probe", WARN, f"The server at {root} did not answer: {exc}", {})
+
+    results: dict[str, Any] = {}
+    for model in snapshot.models:
+        declared = set(model.capabilities or ())
+        if "tools" not in declared:
+            continue
+        capable, reason, evidence = await _probe_one(root, model.name)
+        results[model.name] = {
+            "capable": capable,
+            "reason": reason,
+            "declared": sorted(declared),
+        }
+        if capable is not None:
+            tool_probe_store.write_verdict(
+                "ollama",
+                model.name,
+                capable=capable,
+                reason=reason,
+                evidence=evidence,
+                digest=model.digest or None,
+            )
+
+    if not results:
+        return Check(
+            "tool-probe",
+            WARN,
+            "No download declares tool support, so there was nothing to measure.",
+            {"server": root},
+        )
+    refuted = sorted(n for n, r in results.items() if r["capable"] is False)
+    unproven = sorted(n for n, r in results.items() if r["capable"] is None)
+    facts = {"server": root, "results": results, "store": str(tool_probe_store.probe_path())}
+    # WARN, not FAIL: a model that overstates itself is a normal (if
+    # disappointing) download, and the gate now handles it — the exit code is
+    # reserved for a genuinely broken install.
+    if refuted:
+        return Check(
+            "tool-probe",
+            WARN,
+            f"{len(refuted)} download(s) declare tool support but never called the "
+            f"tool: {', '.join(refuted)}. The runtime gate now hides tools from "
+            f"them; re-run after a re-pull or a model update.",
+            facts,
+        )
+    if unproven:
+        return Check(
+            "tool-probe",
+            WARN,
+            f"{len(unproven)} download(s) could not be measured and keep their "
+            f"declaration: {', '.join(unproven)}.",
+            facts,
+        )
+    return Check(
+        "tool-probe",
+        OK,
+        f"Every tool-declaring download called the tool ({len(results)} measured).",
+        facts,
+    )
+
+
+async def run(server: str | None, *, tool_probe: bool = False) -> list[Check]:
     """Every check, in the order a reader wants them."""
     from jarvis.brain.ollama_pull import server_root
     from jarvis.core import config as config_mod
@@ -286,6 +476,8 @@ async def run(server: str | None) -> list[Check]:
     checks.append(await _roles(root, cfg))
     checks.append(await _card_parity(root))
     checks.append(_autostart(cfg))
+    if tool_probe:
+        checks.append(await _tool_probe(root))
     return checks
 
 
@@ -293,9 +485,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--server", default=None, help="Ollama root (default: the configured one)")
+    parser.add_argument(
+        "--tool-probe",
+        action="store_true",
+        help=(
+            "measure whether every tool-declaring download really calls a tool "
+            "(loads ONE model at a time, keep_alive:0, records the verdict and "
+            "prints it); off by default"
+        ),
+    )
     args = parser.parse_args()
 
-    checks = asyncio.run(run(args.server))
+    checks = asyncio.run(run(args.server, tool_probe=args.tool_probe))
 
     if args.json:
         print(json.dumps([asdict(c) for c in checks], indent=2))

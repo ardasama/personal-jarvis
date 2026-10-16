@@ -1,0 +1,194 @@
+"""The opt-in behavioural tool probe in ``scripts/check_local_models.py``.
+
+Offline: the response classifier is a pure function and the probe loop runs
+against a fake inventory with a scripted answer, so nothing loads a model and
+nothing touches a network. Live 2026-10-16: ``deepseek-r1:8b`` declared
+``tools``, fabricated a result and never called one; ``qwen3.5:4b`` called it.
+"""
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
+
+_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "check_local_models.py"
+
+
+def _load() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("check_local_models_under_test", _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+# ------------------------------------------------------------- the classifier
+
+
+def test_a_real_tool_call_is_capable() -> None:
+    module = _load()
+    capable, reason, evidence = module.classify_probe_response(
+        {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "get_weather", "arguments": {}}}],
+            }
+        }
+    )
+    assert capable is True
+    assert reason == "tool_calls"
+    assert "get_weather" in evidence
+
+
+def test_a_fabricated_result_is_not_capable() -> None:
+    """The live shape: values nobody returned, with no tool call."""
+    module = _load()
+    capable, reason, evidence = module.classify_probe_response(
+        {
+            "message": {
+                "role": "assistant",
+                "content": "According to the weather tool, it is partly sunny 24°C.",
+            }
+        }
+    )
+    assert capable is False
+    assert reason == "confabulation"
+    assert "without calling" in evidence
+
+
+def test_a_plain_answer_without_a_call_is_not_capable() -> None:
+    module = _load()
+    capable, reason, _ = module.classify_probe_response(
+        {"message": {"role": "assistant", "content": "I cannot check the weather."}}
+    )
+    assert capable is False
+    assert reason == "no_tool_call"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {},
+        {"error": "boom"},
+        {"message": None},
+        {"message": {"role": "assistant", "content": "   "}},
+        {"message": {"role": "assistant"}},
+        "not a mapping",
+    ],
+)
+def test_an_unproven_answer_is_never_recorded(payload: Any) -> None:
+    """``None`` means 'proves nothing' — the gate must keep the declaration."""
+    module = _load()
+    capable, _reason, _evidence = module.classify_probe_response(payload)
+    assert capable is None
+
+
+# --------------------------------------------------------------- the loop
+
+
+class _Model:
+    def __init__(self, name: str, capabilities: tuple[str, ...], digest: str = "") -> None:
+        self.name = name
+        self.capabilities = capabilities
+        self.digest = digest
+
+
+class _Snapshot:
+    models: tuple[_Model, ...] = (
+        _Model("liar:8b", ("completion", "tools"), "sha256:liar"),
+        _Model("honest:4b", ("completion", "tools"), "sha256:honest"),
+        _Model("chatonly:1b", ("completion",)),
+    )
+
+
+@pytest.fixture
+def _probe_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    from jarvis.brain import ollama_inventory
+    from jarvis.core import config as core_config
+
+    module = _load()
+    monkeypatch.setattr(core_config, "DATA_DIR", tmp_path)
+
+    async def _snapshot(root: str) -> _Snapshot:
+        return _Snapshot()
+
+    monkeypatch.setattr(ollama_inventory, "cached_snapshot", _snapshot)
+
+    answers: dict[str, tuple[bool | None, str, str]] = {
+        "liar:8b": (False, "confabulation", "stated a result without calling"),
+        "honest:4b": (True, "tool_calls", "called get_weather"),
+    }
+    seen: list[str] = []
+
+    async def _probe(root: str, model: str) -> tuple[bool | None, str, str]:
+        seen.append(model)
+        return answers[model]
+
+    monkeypatch.setattr(module, "_probe_one", _probe)
+    module._seen = seen  # type: ignore[attr-defined]
+    return module
+
+
+@pytest.mark.asyncio
+async def test_only_measured_verdicts_are_recorded(_probe_env: ModuleType) -> None:
+    from jarvis.brain import tool_probe_store as store
+
+    check = await _probe_env._tool_probe("http://127.0.0.1:11434")
+
+    # A model that declares no tools was never probed: no cost, no verdict.
+    assert _probe_env._seen == ["liar:8b", "honest:4b"]
+    assert store.verdict_for("ollama", "liar:8b") is False
+    assert store.verdict_for("ollama", "honest:4b") is True
+    assert store.verdict_for("ollama", "chatonly:1b") is None
+    assert store.reason_for("ollama", "liar:8b") == "confabulation"
+    # WARN, not FAIL: a model that overstates itself is a normal download and
+    # the gate now handles it — the exit code is for a broken install.
+    assert check.status == _probe_env.WARN
+    assert "liar:8b" in check.detail
+    assert check.facts["store"].endswith("model_tool_probe.json")
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_server_is_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jarvis.brain import ollama_inventory
+
+    module = _load()
+
+    async def _boom(root: str) -> _Snapshot:
+        raise RuntimeError("no server")
+
+    monkeypatch.setattr(ollama_inventory, "cached_snapshot", _boom)
+
+    check = await module._tool_probe("http://127.0.0.1:11434")
+    assert check.status == module.WARN
+    assert "did not answer" in check.detail
+
+
+@pytest.mark.asyncio
+async def test_no_tool_declaring_model_means_nothing_to_measure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jarvis.brain import ollama_inventory
+
+    module = _load()
+
+    class _NoTools:
+        models = (_Model("chatonly:1b", ("completion",)),)
+
+    async def _snapshot(root: str) -> _NoTools:
+        return _NoTools()
+
+    monkeypatch.setattr(ollama_inventory, "cached_snapshot", _snapshot)
+
+    check = await module._tool_probe("http://127.0.0.1:11434")
+    assert check.status == module.WARN
+    assert "nothing to measure" in check.detail
