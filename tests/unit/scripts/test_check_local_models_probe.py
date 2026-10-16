@@ -223,3 +223,93 @@ async def test_no_tool_declaring_model_means_nothing_to_measure(
     check = await module._tool_probe("http://127.0.0.1:11434")
     assert check.status == module.WARN
     assert "nothing to measure" in check.detail
+
+
+# ------------------------------------------------------ the context-fit check
+
+
+class _FitModel:
+    def __init__(
+        self, name: str, size_gb: float, context_length: int, parameters: str = ""
+    ) -> None:
+        self.name = name
+        self.size_bytes = int(size_gb * (1024**3))
+        self.context_length = context_length
+        self.parameters = parameters
+
+
+def _fit_env(monkeypatch: pytest.MonkeyPatch, models: tuple[_FitModel, ...], accel: float):
+    from jarvis.brain import ollama_inventory
+    from jarvis.hardware import detection
+
+    module = _load()
+    monkeypatch.setattr(detection, "usable_accelerator_gb", lambda: (accel, "test probe"))
+
+    class _Snapshot:
+        pass
+
+    # A class body does not close over the enclosing function's names, so the
+    # models are attached after creation.
+    _Snapshot.models = models
+
+    async def _snapshot(root: str) -> _Snapshot:
+        return _Snapshot()
+
+    monkeypatch.setattr(ollama_inventory, "cached_snapshot", _snapshot)
+    return module
+
+
+@pytest.mark.asyncio
+async def test_a_download_that_asks_for_more_than_the_card_holds_is_flagged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live shape: 4.9 GB, native 131072 tokens, no num_ctx, 8 GB card."""
+    module = _fit_env(
+        monkeypatch,
+        (
+            _FitModel("risky:8b", 4.9, 131_072),
+            _FitModel("capped:8b", 4.9, 131_072, "num_ctx 16384"),
+            _FitModel("small:1b", 0.5, 32_768),
+        ),
+        accel=8.0,
+    )
+
+    check = await module._context_fit("http://127.0.0.1:11434")
+
+    assert check.status == module.WARN
+    assert "risky:8b" in check.detail
+    # The capped variant is the FIX, not a risk; the small model cannot exhaust
+    # the card by itself.
+    assert "capped:8b" not in check.detail
+    assert "small:1b" not in check.detail
+    assert check.facts["at_risk"] == [
+        {"model": "risky:8b", "size_gb": 4.9, "native_context": 131_072}
+    ]
+    assert check.facts["capped_by_num_ctx"] == ["capped:8b"]
+
+
+@pytest.mark.asyncio
+async def test_a_capped_install_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _fit_env(
+        monkeypatch,
+        (_FitModel("capped:8b", 4.9, 131_072, "num_ctx 16384"),),
+        accel=8.0,
+    )
+
+    check = await module._context_fit("http://127.0.0.1:11434")
+
+    assert check.status == module.OK
+    assert check.facts["at_risk"] == []
+
+
+@pytest.mark.asyncio
+async def test_no_readable_accelerator_stands_the_check_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a memory figure there is nothing to compare — say so, never guess."""
+    module = _fit_env(monkeypatch, (), accel=0.0)
+
+    check = await module._context_fit("http://127.0.0.1:11434")
+
+    assert check.status == module.WARN
+    assert "Not checked" in check.detail
