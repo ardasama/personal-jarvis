@@ -8,12 +8,27 @@ pick the first REGISTRY family with a usable credential.
 """
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
 
-from jarvis.brain.factory import _build_flash_provider
+from jarvis.brain.factory import _build_flash_provider, _pick_keyed_flash_fallback
 from tests.unit.brain.test_ack_brain.conftest import make_ack_config
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_health_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the pick deterministic.
+
+    The real ledger (``data/state/provider_health.json``) holds THIS box's own
+    credential failures; a unit test must never depend on it. Tests that
+    exercise the dead-key deferral override this patch explicitly.
+    """
+    monkeypatch.setattr(
+        "jarvis.brain.provider_health_ledger.has_credential_failure",
+        lambda provider=None: False,
+    )
 
 
 def _jcfg(*, brain_primary: str) -> SimpleNamespace:
@@ -167,3 +182,171 @@ def test_pipeline_voice_keeps_following_an_openai_primary(
     _build_flash_provider(jcfg, ack_cfg)
 
     assert ack_cfg.provider == "openai"
+
+
+# --------------------------------------------------- the reason, said truly
+
+
+def test_a_voice_key_primary_reports_the_real_reason(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Live 2026-10-16: brain.primary='gemini' (on the realtime voice key) was
+    logged as "has no Flash adapter" although gemini IS in REGISTRY. The reader
+    went hunting a missing adapter that never was missing."""
+    keys = {"openai_api_key": "sk-test", "gemini_api_key": "gk-test"}
+    monkeypatch.setattr(
+        "jarvis.core.config.get_secret", lambda key, env_fallback=None: keys.get(key)
+    )
+
+    ack_cfg = make_ack_config(provider="follow_brain")
+    with caplog.at_level(logging.WARNING, logger="jarvis.brain.factory"):
+        _build_flash_provider(_live_jcfg(brain_primary="openai"), ack_cfg)
+
+    assert ack_cfg.provider == "gemini"
+    assert "realtime voice key" in caplog.text
+    assert "has no Flash adapter" not in caplog.text
+
+
+def test_a_primary_without_an_adapter_still_says_so(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """claude-api genuinely has no Flash adapter — that message must survive."""
+
+    def _fake_get_secret(key: str, env_fallback: str | None = None) -> str | None:
+        return "sk-test" if key == "openai_api_key" else None
+
+    monkeypatch.setattr("jarvis.core.config.get_secret", _fake_get_secret)
+
+    ack_cfg = make_ack_config(provider="follow_brain")
+    with caplog.at_level(logging.WARNING, logger="jarvis.brain.factory"):
+        _build_flash_provider(_jcfg(brain_primary="claude-api"), ack_cfg)
+
+    assert ack_cfg.provider == "openai"
+    assert "has no Flash adapter" in caplog.text
+    assert "realtime voice key" not in caplog.text
+
+
+def test_no_fallback_at_all_names_the_true_reason(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Voice-key primary and no usable credential anywhere: the disabling
+    message names the voice key, not a missing adapter."""
+    monkeypatch.setattr(
+        "jarvis.core.config.get_secret",
+        lambda key, env_fallback=None: "sk-test" if key == "openai_api_key" else None,
+    )
+    jcfg = _live_jcfg(brain_primary="openai")
+    jcfg.voice.mode = "pipeline"  # nothing bills the voice key now
+    # Make the primary genuinely adapter-less AND credential-less everywhere.
+    jcfg.brain.primary = "claude-api"
+    monkeypatch.setattr(
+        "jarvis.brain.factory._pick_keyed_flash_fallback", lambda *a, **k: None
+    )
+
+    ack_cfg = make_ack_config(provider="follow_brain")
+    with caplog.at_level(logging.WARNING, logger="jarvis.brain.factory"):
+        provider = _build_flash_provider(jcfg, ack_cfg)
+
+    assert provider is None
+    assert "has no Flash adapter" in caplog.text  # the honest reason here
+
+
+# ------------------------------------------------------ the dead-key deferral
+
+
+def _pick_cfg(*families: str) -> SimpleNamespace:
+    """An ack config exposing only ``families`` (credential slot per family)."""
+
+    def _entry(secret: str | None) -> SimpleNamespace:
+        return SimpleNamespace(api_key_secret=secret)
+
+    every = {
+        "gemini": _entry("gemini_api_key"),
+        "grok": _entry("xai_api_key"),
+        "openai": _entry("openai_api_key"),
+        "ollama": _entry(None),
+    }
+    return SimpleNamespace(providers=SimpleNamespace(**{f: every[f] for f in families}))
+
+
+def test_a_dead_key_family_is_skipped_for_a_working_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live 2026-10-16: flash work landed on 'grok', whose key answered
+    "User not found." A family the ledger saw fail must not be picked while
+    another keyed family works."""
+    monkeypatch.setattr(
+        "jarvis.core.config.get_provider_secret", lambda provider, *a, **k: None
+    )
+    keys = {"gemini_api_key": "gk-dead", "openai_api_key": "sk-live"}
+    monkeypatch.setattr(
+        "jarvis.core.config.get_secret", lambda key, env_fallback=None: keys.get(key)
+    )
+    monkeypatch.setattr(
+        "jarvis.brain.provider_health_ledger.has_credential_failure",
+        lambda provider=None: provider == "gemini",
+    )
+
+    pick = _pick_keyed_flash_fallback(_pick_cfg("gemini", "openai"))
+    assert pick == "openai"
+
+
+def test_a_dead_key_family_is_still_the_last_resort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never a silent disable: with only the failed key present (no keyless
+    family configured) flash still resolves to it, so the person sees the
+    failure and fixes the key in-app."""
+    monkeypatch.setattr(
+        "jarvis.core.config.get_provider_secret", lambda provider, *a, **k: None
+    )
+    monkeypatch.setattr(
+        "jarvis.core.config.get_secret",
+        lambda key, env_fallback=None: "gk-dead" if key == "gemini_api_key" else None,
+    )
+    monkeypatch.setattr(
+        "jarvis.brain.provider_health_ledger.has_credential_failure",
+        lambda provider=None: provider == "gemini",
+    )
+
+    pick = _pick_keyed_flash_fallback(_pick_cfg("gemini", "openai"))
+    assert pick == "gemini"
+
+
+def test_a_keyless_local_family_outranks_a_dead_cloud_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local server needs no credential, so it answers when the cloud key is
+    known-dead — the honest order (live shape: gemini 401, ollama up)."""
+    monkeypatch.setattr(
+        "jarvis.core.config.get_provider_secret", lambda provider, *a, **k: None
+    )
+    monkeypatch.setattr(
+        "jarvis.core.config.get_secret",
+        lambda key, env_fallback=None: "gk-dead" if key == "gemini_api_key" else None,
+    )
+    monkeypatch.setattr(
+        "jarvis.brain.provider_health_ledger.has_credential_failure",
+        lambda provider=None: provider == "gemini",
+    )
+
+    pick = _pick_keyed_flash_fallback(_pick_cfg("gemini", "openai", "ollama"))
+    assert pick == "ollama"
+
+
+def test_a_working_key_is_untouched_by_the_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "jarvis.core.config.get_provider_secret", lambda provider, *a, **k: None
+    )
+    monkeypatch.setattr(
+        "jarvis.core.config.get_secret",
+        lambda key, env_fallback=None: "gk-live" if key == "gemini_api_key" else None,
+    )
+    monkeypatch.setattr(
+        "jarvis.brain.provider_health_ledger.has_credential_failure",
+        lambda provider=None: False,
+    )
+
+    assert _pick_keyed_flash_fallback(_pick_cfg("gemini", "openai")) == "gemini"

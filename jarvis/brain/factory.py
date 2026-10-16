@@ -1830,20 +1830,47 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
             )
             provider_name = primary
         else:
+            # Two distinct reasons reach this branch; say the true one. A
+            # primary that IS a REGISTRY family but pays with the realtime
+            # voice key HAS a Flash adapter — flash composition merely defers
+            # away from that key (mandate 2026-09-29). Reporting it as "has no
+            # Flash adapter" sent the reader hunting a nonexistent missing
+            # adapter (live 2026-10-16: brain.primary='gemini' logged as
+            # adapter-less while gemini was right there in REGISTRY).
+            deferred_for_voice_key = bool(
+                primary and primary in REGISTRY and bills_voice_key(jcfg, primary)
+            )
             fallback = _pick_keyed_flash_fallback(ack_cfg, jcfg)
             if fallback is None:
+                if deferred_for_voice_key:
+                    log.warning(
+                        "Flash-Brain: brain.primary=%r pays with the realtime "
+                        "voice key, so flash composition defers away from it — "
+                        "and no other REGISTRY provider has a usable "
+                        "credential; disabling Flash-Brain.",
+                        primary,
+                    )
+                else:
+                    log.warning(
+                        "Flash-Brain: brain.primary=%r has no Flash adapter "
+                        "(REGISTRY=%s) and no REGISTRY provider has a usable "
+                        "credential; disabling Flash-Brain.",
+                        primary, sorted(REGISTRY.keys()),
+                    )
+                return None
+            if deferred_for_voice_key:
+                log.warning(
+                    "Flash-Brain: brain.primary=%r pays with the realtime "
+                    "voice key, so flash composition defers to keyed provider "
+                    "%r.",
+                    primary, fallback,
+                )
+            else:
                 log.warning(
                     "Flash-Brain: brain.primary=%r has no Flash adapter "
-                    "(REGISTRY=%s) and no REGISTRY provider has a usable "
-                    "credential; disabling Flash-Brain.",
-                    primary, sorted(REGISTRY.keys()),
+                    "(REGISTRY=%s); falling back to keyed provider %r.",
+                    primary, sorted(REGISTRY.keys()), fallback,
                 )
-                return None
-            log.warning(
-                "Flash-Brain: brain.primary=%r has no Flash adapter "
-                "(REGISTRY=%s); falling back to keyed provider %r.",
-                primary, sorted(REGISTRY.keys()), fallback,
-            )
             provider_name = fallback
         ack_cfg.provider = provider_name
     provider_cls = REGISTRY.get(provider_name)
@@ -1867,7 +1894,13 @@ def _pick_keyed_flash_fallback(ack_cfg: Any, jcfg: Any = None) -> str | None:
     openai, ollama, ...) as the tie-break so an all-keyed setup keeps the
     historical default. A provider config with no ``api_key_secret`` field
     (local Ollama) needs no credential and is always considered usable.
+
+    Two deferrals keep the pick honest without a probe: a family on the
+    realtime voice key (mandate 2026-09-29), and a family whose credential the
+    health ledger already saw fail on this run. Both are last resorts, not
+    exclusions — a single-key install still resolves to something.
     """
+    from jarvis.brain import provider_health_ledger as _health_ledger
     from jarvis.brain.ack_brain.providers import REGISTRY
     from jarvis.brain.voice_key import bills_voice_key
     from jarvis.core.config import get_provider_secret, get_secret
@@ -1877,6 +1910,13 @@ def _pick_keyed_flash_fallback(ack_cfg: Any, jcfg: Any = None) -> str | None:
     # before a keyless local provider, so a single-key install without a local
     # server keeps a working flash tier (AP-22).
     deferred: str | None = None
+    # A family whose credential the brain JUST saw fail (401/402 — the ledger
+    # fingerprints it) is deferred as well: picking it for every ack spends a
+    # round trip on a key that cannot work (live 2026-10-16: flash work landed
+    # on 'grok' whose key answered "User not found."). Probe-free and
+    # self-healing — saving a corrected key in-app lifts it at once, because
+    # the ledger keys on the credential's fingerprint.
+    dead: str | None = None
     for name in REGISTRY:
         provider_cfg = getattr(ack_cfg.providers, name, None)
         if provider_cfg is None:
@@ -1889,10 +1929,16 @@ def _pick_keyed_flash_fallback(ack_cfg: Any, jcfg: Any = None) -> str | None:
         # key) still marks the provider usable — the adapters resolve their
         # key through the same two-step lookup.
         if get_secret(secret_name) or get_provider_secret(name):
+            if _health_ledger.has_credential_failure(name):
+                dead = dead or name
+                continue
             if not bills_voice_key(jcfg, name):
                 return name
             deferred = deferred or name
-    return deferred
+    # A dead-key family is still better than NO flash tier: the person can fix
+    # the key in-app, and the honest failure is theirs to see (never a silent
+    # disable) — but only after every working family has been tried.
+    return deferred or dead
 
 
 def _build_ack_fallback(ack_cfg: Any, preferences_provider: Any = None) -> Any:
