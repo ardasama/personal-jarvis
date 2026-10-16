@@ -61,3 +61,51 @@ def test_the_full_map_covers_every_agent() -> None:
     assert set(everything) == set(AGENT_VOICES)
     for row in everything.values():
         assert row["voice_id"] and row["provider"] and row["why"]
+
+
+# ------------------------------------------------- the rest of the household
+
+
+def test_every_role_voice_also_exists_in_the_catalogue() -> None:
+    from jarvis.plugins.tts.curated_catalog import voice_gender  # noqa: PLC0415
+    from jarvis.voice.agent_voices import ROLE_VOICES  # noqa: PLC0415
+
+    for agent, voice in ROLE_VOICES.items():
+        tagged = voice_gender(voice.voice_id)
+        if tagged is None:
+            continue
+        assert tagged == voice.gender, f"{agent}: {voice.voice_id} is tagged {tagged}"
+
+
+def test_the_household_map_covers_both_maps_without_collisions() -> None:
+    from jarvis.voice.agent_voices import AGENT_VOICES, ROLE_VOICES, all_agent_voices  # noqa: PLC0415
+
+    merged = all_agent_voices()
+    assert set(merged) == set(AGENT_VOICES) | set(ROLE_VOICES)
+    assert not (set(AGENT_VOICES) & set(ROLE_VOICES)), "an agent lives in both maps"
+
+
+def test_every_role_states_a_register_and_a_real_reason() -> None:
+    from jarvis.voice.agent_voices import ROLE_VOICES  # noqa: PLC0415
+
+    for agent, voice in ROLE_VOICES.items():
+        assert voice.agent == agent and voice.register.strip()
+        assert len(voice.why.strip()) > 30, f"{agent} has no real justification"
+        assert voice.gender in ("m", "f")
+
+
+def test_a_role_resolves_through_the_household_lookup() -> None:
+    from jarvis.voice.agent_voices import voice_for_any  # noqa: PLC0415
+
+    reviewer = voice_for_any("reviewer")
+    assert reviewer is not None and reviewer.voice_id == "Rasalgethi"
+    assert voice_for_any("jarvis") is not None  # the first map still answers
+    assert voice_for_any("nobody-at-all") is None
+
+
+def test_a_role_degrades_to_local_by_register_too() -> None:
+    from jarvis.voice.agent_voices import voice_for_any  # noqa: PLC0415
+
+    degraded = voice_for_any("security", available_providers=["piper-local"])
+    assert degraded is not None and degraded.provider == "piper-local"
+    assert degraded.gender == "m" and "degraded" in degraded.why

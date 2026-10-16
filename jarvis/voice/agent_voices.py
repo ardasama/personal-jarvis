@@ -148,3 +148,135 @@ __all__ = [
     "voice_for",
     "voice_map",
 ]
+
+
+# ---------------------------------------------------------------------------
+# The rest of the household: the hub's roles, the session agents and the local
+# subagents. Kept in a second map (and merged by name) so the first map - and
+# anything already reading it - stays exactly as it was.
+# ---------------------------------------------------------------------------
+
+#: Every other agent the owner runs. Same rule as above: a real catalogue id,
+#: a register, and a reason. Roles are gendered by their register, not by any
+#: assumption about who fills them.
+ROLE_VOICES: dict[str, AgentVoice] = {
+    # The hub's own roles (agents/registry.json)
+    "personal-jarvis-lead": AgentVoice(
+        "personal-jarvis-lead", "gemini-flash-tts", "Charon", MASCULINE,
+        "steady, low, unhurried",
+        "Speaks with Jarvis's own voice on purpose: the lead role IS Jarvis, so "
+        "the owner hears one identity whether it answers alone or directs others.",
+    ),
+    "hub": AgentVoice(
+        "hub", "gemini-flash-tts", "Sadaltager", MASCULINE, "neutral, coordinating",
+        "The hub's own voice: neutral enough to announce any role without colouring it.",
+    ),
+    "planner": AgentVoice(
+        "planner", "gemini-flash-tts", "Orus", MASCULINE, "measured, organising",
+        "Turns a goal into steps aloud: measured, never rushed.",
+    ),
+    "researcher": AgentVoice(
+        "researcher", "gemini-flash-tts", "Enceladus", MASCULINE, "inquiring, careful",
+        "Reads sources out loud: careful, with room for 'unverified'.",
+    ),
+    "architect": AgentVoice(
+        "architect", "gemini-flash-tts", "Algieba", MASCULINE, "structural, calm",
+        "Draws interfaces in words: structural and unhurried.",
+    ),
+    "coder": AgentVoice(
+        "coder", "gemini-flash-tts", "Achird", MASCULINE, "bright, efficient",
+        "Says what it changed and what it checked: brisk, no theatre.",
+    ),
+    "reviewer": AgentVoice(
+        "reviewer", "gemini-flash-tts", "Rasalgethi", MASCULINE, "sharp, critical",
+        "A reviewer must sound like one: precise and unafraid of a bad verdict.",
+    ),
+    "tester": AgentVoice(
+        "tester", "gemini-flash-tts", "Algenib", MASCULINE, "dry, methodical",
+        "Reports pass/fail counts: dry and exact.",
+    ),
+    "security": AgentVoice(
+        "security", "gemini-flash-tts", "Zubenelgenubi", MASCULINE, "grave, watchful",
+        "Speaks about credentials and permissions: grave, never casual.",
+    ),
+    "operator": AgentVoice(
+        "operator", "gemini-flash-tts", "Sadachbia", MASCULINE, "practical, calm",
+        "Deployment and recovery: practical, steady under a failure.",
+    ),
+    # Local subagents (the delegation rule sends low-effort work here)
+    "local-fast": AgentVoice(
+        "local-fast", "grok-voice", "leo", MASCULINE, "quick, light",
+        "The fast local worker: quick and light, because it answers short questions.",
+    ),
+    "local-coder": AgentVoice(
+        "local-coder", "openrouter", "en_paul_neutral", MASCULINE, "neutral, working",
+        "The local coder: neutral, so its output reads as work, not commentary.",
+    ),
+    "local-reasoner": AgentVoice(
+        "local-reasoner", "grok-voice", "rex", MASCULINE, "deliberate, low",
+        "The local reasoner: deliberate and lower, to match a slower answer.",
+    ),
+    # Session agents (the bus)
+    "bus-human": AgentVoice(
+        "bus-human", "gemini-flash-tts", "Kore", FEMININE, "warm, human-facing",
+        "The human-facing session voice: warm, because a person is on the other end.",
+    ),
+    "bus-system": AgentVoice(
+        "bus-system", "gemini-flash-tts", "Zephyr", FEMININE, "neutral, system",
+        "System notices: neutral and light, never emotional.",
+    ),
+    "bus-orchestrator": AgentVoice(
+        "bus-orchestrator", "gemini-flash-tts", "Leda", FEMININE, "coordinating, clear",
+        "Hands work between agents: clear and even.",
+    ),
+    "bus-session-agent": AgentVoice(
+        "bus-session-agent", "gemini-flash-tts", "Aoede", FEMININE, "light, session",
+        "A session agent's voice: light, so long sessions stay listenable.",
+    ),
+    "bus-claude-code": AgentVoice(
+        "bus-claude-code", "gemini-flash-tts", "Callirrhoe", FEMININE, "even, technical",
+        "Reports a coding pane's progress: even and technical.",
+    ),
+    "bus-hub-ui": AgentVoice(
+        "bus-hub-ui", "gemini-flash-tts", "Autonoe", FEMININE, "crisp, interface",
+        "Speaks for the interface itself: crisp and brief.",
+    ),
+}
+
+
+def role_voice(agent: str) -> AgentVoice | None:
+    """The mapped voice for a hub role, session agent or local subagent."""
+    return ROLE_VOICES.get(str(agent or "").strip().lower())
+
+
+def all_agent_voices() -> dict[str, AgentVoice]:
+    """Every mapped agent, the household map merged over the first one."""
+    merged = dict(ROLE_VOICES)
+    merged.update(AGENT_VOICES)
+    return merged
+
+
+def voice_for_any(agent: str, *, available_providers: Any = None) -> AgentVoice | None:
+    """``voice_for`` across the WHOLE household, not just the first map."""
+    key = str(agent or "").strip().lower()
+    if key in AGENT_VOICES:
+        return voice_for(key, available_providers=available_providers)
+    mapped = ROLE_VOICES.get(key)
+    if mapped is None:
+        return None
+    if available_providers is None:
+        return mapped
+    available = {str(p).strip().lower() for p in available_providers}
+    if mapped.provider.lower() in available:
+        return mapped
+    provider, voice_id = _FALLBACK_BY_GENDER.get(mapped.gender, ("piper-local", ""))
+    if provider.lower() not in available:
+        return None
+    return AgentVoice(
+        agent=mapped.agent, provider=provider, voice_id=voice_id, gender=mapped.gender,
+        register=mapped.register,
+        why=f"{mapped.why} (degraded: '{mapped.provider}' was not available)",
+    )
+
+
+__all__ += ["ROLE_VOICES", "all_agent_voices", "role_voice", "voice_for_any"]
