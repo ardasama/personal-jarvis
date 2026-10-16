@@ -94,7 +94,15 @@ def block_for_turn(soul: str = "", **signals: Any) -> str:
     character, and returns the merged block - never a bare character, so the
     limits can never be omitted by a caller in a hurry.
     """
-    return merge_into_prompt(soul=soul, character=character_block(**signals))
+    character = character_block(**signals)
+    spoken = str(signals.get("channel") or "").strip().lower() == "voice"
+    if spoken and len(character) > SPOKEN_BLOCK_SOFT_LIMIT:
+        # A spoken block has a STATED ceiling, and only the character text is
+        # trimmed to reach it. The limits below are never shortened, never
+        # reordered and never dropped - the ceiling may not buy room by spending
+        # a rule.
+        character = character[:SPOKEN_BLOCK_SOFT_LIMIT].rstrip() + " …"
+    return merge_into_prompt(soul=soul, character=character)
 
 
 __all__ = [

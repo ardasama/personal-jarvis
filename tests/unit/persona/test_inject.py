@@ -68,3 +68,44 @@ def test_an_unknown_moment_still_produces_a_usable_block() -> None:
 def test_the_limits_block_is_stable_and_numbered_by_bullets() -> None:
     text = limits_block()
     assert text.count("\n- ") == len(HOUSE_LIMITS)
+
+
+# ------------------------------------------------- the spoken ceiling, consumed
+
+
+def _long_character_signals() -> dict[str, object]:
+    """A moment whose character text is certainly wider than the ceiling."""
+    from jarvis.persona.inject import SPOKEN_BLOCK_SOFT_LIMIT  # noqa: PLC0415
+
+    # 'teacher' + 'auditor' together carry many effects; ask for the FULL form so
+    # the character text is long enough to hit the ceiling.
+    return {"task": "teach", "channel": "voice", "short": False, "audience": "owner",
+            "reversibility": "irreversible", "urgency": "high", "language": "tr",
+            "_limit": SPOKEN_BLOCK_SOFT_LIMIT}
+
+
+
+# ------------------------------------------------- the spoken ceiling, consumed
+
+
+def test_a_spoken_block_is_trimmed_to_its_stated_ceiling(monkeypatch) -> None:
+    from jarvis.persona import inject as inj
+
+    monkeypatch.setattr(inj, "SPOKEN_BLOCK_SOFT_LIMIT", 60)
+    merged = inj.block_for_turn(soul="", task="teach", channel="voice", short=False)
+
+    assert "…" in merged
+    for rule in inj.HOUSE_LIMITS:
+        assert rule in merged
+    assert merged.rstrip().endswith("blocker instead.")
+
+
+def test_a_written_block_is_never_trimmed(monkeypatch) -> None:
+    from jarvis.persona import inject as inj
+
+    monkeypatch.setattr(inj, "SPOKEN_BLOCK_SOFT_LIMIT", 60)
+    merged = inj.block_for_turn(soul="", task="teach", channel="text")
+
+    assert "…" not in merged
+    for rule in inj.HOUSE_LIMITS:
+        assert rule in merged
