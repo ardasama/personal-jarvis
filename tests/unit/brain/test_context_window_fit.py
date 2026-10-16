@@ -401,6 +401,14 @@ class TestModelTooLargeCause:
         assert table[lang].strip()
         assert "{" not in table[lang]  # no unformatted placeholders
 
+    def test_the_developer_diagnostic_names_the_fit_not_the_network(self) -> None:
+        text = _format_provider_chain_error(
+            [("ollama", "deepseek-r1:8b", "model_too_large", self._LIVE_OOM)]
+        )
+        assert "ollama" in text
+        assert "laedt nicht" in text  # i18n-allow: the diagnostic is German
+        assert "Netzwerk" not in text  # i18n-allow
+
 
 class TestToolCountCap:
     """Live 2026-09-29: xAI refused 378 tools ("the maximum is 350")."""

@@ -14536,6 +14536,7 @@ def _format_provider_chain_error(
     vision_unsupported: list[str] = []
     invalid_models: list[str] = []
     context_overflow: list[str] = []
+    models_too_large: list[str] = []
     rate_limited: list[str] = []
     empty_responses: list[str] = []
     other_fails: list[str] = []
@@ -14552,6 +14553,8 @@ def _format_provider_chain_error(
             invalid_models.append(prov_name)
         elif kind == "context_overflow":
             context_overflow.append(prov_name)
+        elif kind == "model_too_large":
+            models_too_large.append(prov_name)
         elif kind in ("rate_limit", "skipped_cooldown"):
             rate_limited.append(prov_name)
         elif kind == "empty_response":
@@ -14575,6 +14578,7 @@ def _format_provider_chain_error(
     vision_unsupported = _uniq(vision_unsupported)
     invalid_models = _uniq(invalid_models)
     context_overflow = _uniq(context_overflow)
+    models_too_large = _uniq(models_too_large)
     rate_limited = _uniq(rate_limited)
     empty_responses = _uniq(empty_responses)
     other_fails = _uniq(other_fails)
@@ -14626,6 +14630,12 @@ def _format_provider_chain_error(
             "Modell mit groesserem Kontext waehlen, verbundene MCP-Server "
             "reduzieren oder einen neuen Chat starten."
         )
+    if models_too_large:
+        parts.append(
+            f"Modell laedt nicht (Speicher reicht nicht) bei "
+            f"{', '.join(models_too_large)}. Kleineres Modell oder Variante mit "
+            "kleinerem Kontext waehlen."
+        )
     # 2. Rate limits are listed as supplementary info
     if rate_limited:
         prefix = "Ausserdem rate" if parts else "Rate"
@@ -14642,6 +14652,7 @@ def _format_provider_chain_error(
         )
     # 4. Other failures only mentioned when there is no clear root cause
     if (not missing_keys and not invalid_models and not context_overflow
+            and not models_too_large
             and not rate_limited and not empty_responses and other_fails):
         parts.append(
             f"Provider {', '.join(other_fails)} unerreichbar. "
