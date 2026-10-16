@@ -22,6 +22,10 @@ from __future__ import annotations
 from typing import Any
 
 #: Always present, whatever the moment. Written once, appended last.
+#: A spoken character block above this many characters is worth trimming next
+#: time; the limits are never counted, they always ride full.
+SPOKEN_BLOCK_SOFT_LIMIT = 700
+
 HOUSE_LIMITS: tuple[str, ...] = (
     "Never delete or overwrite the person's data without a uniquely named backup.",
     "Never reveal, print or store a credential.",
@@ -94,6 +98,7 @@ def block_for_turn(soul: str = "", **signals: Any) -> str:
 
 
 __all__ = [
+    "SPOKEN_BLOCK_SOFT_LIMIT",
     "HOUSE_LIMITS",
     "block_for_turn",
     "character_block",
