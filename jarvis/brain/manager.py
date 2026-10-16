@@ -6734,6 +6734,13 @@ class BrainManager:
         capability lost for one turn; a request the server refuses is the
         whole turn lost.
         """
+        # Pre-flight finding for THIS attempt: when the prompt + history ALONE
+        # already exceed the model's declared window, no tool surface can save
+        # the request. The chain's ``except`` reads this to attribute a
+        # provider's GENERIC failure (a bare timeout, a 500 with no size
+        # marker) to the size, not the network. Reset first so an attempt that
+        # fits never inherits the previous provider's finding.
+        self._preflight_over_window: tuple[int, int] | None = None
         if not isinstance(tools, dict) or not tools:
             return tools
         try:
@@ -6753,6 +6760,10 @@ class BrainManager:
             + _approx_history_tokens(history)
             + _CONTEXT_FIT_RESERVE_TOKENS
         )
+        if window > 0 and used >= window:
+            # Even zero tools leave the request over the window: the honest
+            # cause of a refusal is the size. Recorded for the chain's except.
+            self._preflight_over_window = (used, window)
         keep: set[str] = set()
         mandated = getattr(self, "_evidence_required_tool", None)
         if mandated:
@@ -12439,7 +12450,28 @@ class BrainManager:
                 # chain every turn (live forensic 2026-06-28: a depleted Gemini
                 # router bricked the whole turn even though OpenRouter was funded
                 # — AP-22). Only a genuinely transient 429 takes the cooldown path.
-                kind = _classify_provider_error(msg, default="call_fail")
+                # The context fit ran for THIS attempt; consume its finding once
+                # so a later provider never inherits it. A provider that refused
+                # an oversized request with a generic error (a bare timeout, a
+                # 5xx with no marker) is then attributed to the SIZE the manager
+                # measured, not to a network nobody broke (live 2026-10-16: a
+                # 40038-token request against a 32768-token window read as
+                # "Request timed out.").
+                over_window = getattr(self, "_preflight_over_window", None)
+                self._preflight_over_window = None
+                kind = _classify_with_preflight_overflow(
+                    msg, default="call_fail", over_window=over_window
+                )
+                if kind == "context_overflow" and over_window is not None:
+                    log.warning(
+                        "Request did not fit %s(%s): prompt+history ~%d tokens "
+                        "exceed the model's %d-token window (provider error: %s)",
+                        prov_name,
+                        model,
+                        over_window[0],
+                        over_window[1],
+                        msg[:160],
+                    )
                 if turn_override is None:
                     _health_ledger.record_failure(
                         prov_name, _health_ledger.MODALITY_BRAIN, exc, model=model
@@ -12482,7 +12514,13 @@ class BrainManager:
                                 "Provider %s fuer diese Session deaktiviert (%s) — die Kette "
                                 "weicht auf einen anderen verfuegbaren Anbieter aus. "
                                 "Setup: Sidebar -> API-Keys.", prov_name, kind)
-                    provider_errors.append((prov_name, model, kind, msg[:200]))
+                    detail = msg[:200]
+                    if kind == "context_overflow" and over_window is not None:
+                        detail = (
+                            f"prompt+history ~{over_window[0]} tokens exceed the "
+                            f"model's {over_window[1]}-token window"
+                        )
+                    provider_errors.append((prov_name, model, kind, detail))
                 # NOTE BUG-019 (2026-05-11): this generic ``continue`` does
                 # not touch the failing provider's *internal* state. For
                 # most providers that's correct (an HTTP error is purely
@@ -14096,6 +14134,31 @@ def _classify_provider_error(msg: str, *, default: str) -> str:
                              "rate limit", "too many requests")):
         return "rate_limit"
     return default
+
+
+def _classify_with_preflight_overflow(
+    msg: str,
+    *,
+    default: str,
+    over_window: tuple[int, int] | None,
+) -> str:
+    """Classify a provider error, preferring the manager's own size finding.
+
+    ``_classify_provider_error`` reads the SIZE from the provider's wording.
+    When the provider instead refuses an oversized request with a generic
+    failure — a bare timeout, a 5xx with no marker — the wording is absent and
+    the chain read "unreachable — check the network" for a request the manager
+    had already MEASURED as not fitting. ``over_window`` is that measurement
+    (``used_tokens, window``) from ``_fit_tools_to_brain`` for this attempt.
+
+    Only a generic ``call_fail``/``init_fail`` is overridden: a concrete
+    classification (missing_key, bad_key, rate_limit, …) is a fact about this
+    credential and must win.
+    """
+    kind = _classify_provider_error(msg, default=default)
+    if over_window is not None and kind in ("call_fail", "init_fail"):
+        return "context_overflow"
+    return kind
 
 
 def _keyless_provider_is_rescued_by_oauth(provider_name: str) -> bool:

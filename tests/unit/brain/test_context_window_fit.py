@@ -26,6 +26,7 @@ from jarvis.brain.manager import (
     _PROVIDER_DOWN_CAUSE_PHRASES,
     BrainManager,
     _classify_provider_error,
+    _classify_with_preflight_overflow,
     _fit_tools_to_context_window,
     _format_provider_chain_error,
     _primary_provider_down_cause,
@@ -196,6 +197,108 @@ class TestFitOnTheManager:
 
         tools = {"a": _tool("a", size=60)}
         assert m._fit_tools_to_brain(tools, _Windowless(), system_prompt="", history=None) is tools
+
+    # ------------------------------------------ the pre-flight size finding
+
+    def test_a_prompt_over_the_window_is_recorded_for_the_chain(self) -> None:
+        # Live 2026-10-16: prompt+history ~40038 tokens against a 32768 window,
+        # 92 of 92 tools hidden, budget for tools 0 — and the provider answered
+        # with a bare timeout. The fit records the size so the chain can name it.
+        m = self._mgr()
+        m._fit_tools_to_brain(
+            {"a": _tool("a")}, _FakeBrain(32_768), system_prompt="x" * 140_000, history=None
+        )
+        over = m._preflight_over_window
+        assert over is not None
+        used, window = over
+        assert window == 32_768
+        assert used >= window
+
+    def test_a_request_that_fits_records_nothing(self) -> None:
+        m = self._mgr()
+        m._fit_tools_to_brain(
+            {"a": _tool("a")}, _FakeBrain(1_048_576), system_prompt="x" * 40_000, history=None
+        )
+        assert m._preflight_over_window is None
+
+    def test_an_undeclared_window_records_nothing(self) -> None:
+        m = self._mgr()
+
+        class _Windowless:
+            name = "w"
+
+        m._fit_tools_to_brain(
+            {"a": _tool("a")}, _Windowless(), system_prompt="x" * 200_000, history=None
+        )
+        assert m._preflight_over_window is None
+
+    def test_the_finding_is_reset_per_attempt(self) -> None:
+        # A small-window provider records the overflow; the next (cloud-sized)
+        # provider in the same turn must not inherit it.
+        m = self._mgr()
+        m._fit_tools_to_brain(
+            {"a": _tool("a")}, _FakeBrain(1_000), system_prompt="x" * 8_000, history=None
+        )
+        assert m._preflight_over_window is not None
+        m._fit_tools_to_brain(
+            {"a": _tool("a")}, _FakeBrain(1_048_576), system_prompt="x" * 8_000, history=None
+        )
+        assert m._preflight_over_window is None
+
+
+class TestPreflightOverflowAttribution:
+    """A generic refusal of a request the manager MEASURED as too large."""
+
+    def test_a_generic_failure_over_the_window_reads_as_overflow(self) -> None:
+        assert (
+            _classify_with_preflight_overflow(
+                "Request timed out.", default="call_fail", over_window=(40_038, 32_768)
+            )
+            == "context_overflow"
+        )
+
+    def test_the_same_failure_without_a_finding_stays_generic(self) -> None:
+        assert (
+            _classify_with_preflight_overflow(
+                "Request timed out.", default="call_fail", over_window=None
+            )
+            == "call_fail"
+        )
+
+    def test_a_concrete_credential_failure_outranks_the_finding(self) -> None:
+        # A hard fact about this credential wins over the size measurement.
+        assert (
+            _classify_with_preflight_overflow(
+                "Error code: 401 - invalid x-api-key",
+                default="call_fail",
+                over_window=(40_038, 32_768),
+            )
+            == "bad_key"
+        )
+
+    def test_provider_wording_still_classifies_without_a_finding(self) -> None:
+        assert (
+            _classify_with_preflight_overflow(
+                _LIVE_OLLAMA_400, default="call_fail", over_window=None
+            )
+            == "context_overflow"
+        )
+
+    def test_the_spoken_cause_names_the_size_not_the_network(self) -> None:
+        errors = [
+            (
+                "ollama",
+                "local",
+                "context_overflow",
+                "prompt+history ~40038 tokens exceed the model's 32768-token window",
+            )
+        ]
+        cause = _primary_provider_down_cause(errors)
+        assert cause == "context_overflow"
+        phrase = _provider_down_phrase("de", 0, cause)
+        low = phrase.lower()
+        assert "netzwerk" not in low and "network" not in low
+        assert "ollama" not in low
 
 
 # ---------------------------------------------------------- the cause
