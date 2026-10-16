@@ -146,7 +146,7 @@ jobs:
 
       - name: Preserve frozen browser evidence
         if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: frozen-browser-windows-x64
           path: |
@@ -170,7 +170,7 @@ jobs:
       - name: Stage the unsigned installer for SignPath
         id: signpath-unsigned
         if: env.HAS_SIGNPATH_SIGNING == 'true'
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Deliberately outside the `installer-*` pattern the release job
           # downloads: only the verified, signed file may ship.
@@ -249,7 +249,7 @@ jobs:
           echo "::notice::Neither SignPath (SIGNPATH_API_TOKEN + SIGNPATH_ORGANIZATION_ID/PROJECT_SLUG/SIGNING_POLICY_SLUG) nor AZURE_* signing is configured - the installer is UNSIGNED."
 
       - name: Upload the installer
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-windows-x64
           path: dist/installers/PersonalJarvis-Setup-x64.exe
@@ -367,7 +367,7 @@ jobs:
 
       - name: Preserve native wheel diagnostics on build failure
         if: failure() && hashFiles('jarvis/assets/browser/wheels/*.whl') != ''
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: browser-wheel-diagnostic-macos-${{ matrix.arch }}
           path: jarvis/assets/browser/wheels/*.whl
@@ -385,7 +385,7 @@ jobs:
 
       - name: Preserve frozen browser evidence
         if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: frozen-browser-macos-${{ matrix.arch }}
           path: |
@@ -395,7 +395,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload the DMG
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-macos-${{ matrix.arch }}
           path: dist/installers/PersonalJarvis-macOS-${{ matrix.arch }}.dmg
@@ -467,7 +467,7 @@ jobs:
 
       - name: Preserve frozen browser evidence
         if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: frozen-browser-linux-x86_64
           path: |
@@ -477,7 +477,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload the AppImage
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-linux-x86_64
           path: |
@@ -567,7 +567,7 @@ jobs:
           sha256sum -c installers-SHA256SUMS.txt
 
       - name: Upload the checksum manifest
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installers-checksums
           path: installers/installers-SHA256SUMS.txt
