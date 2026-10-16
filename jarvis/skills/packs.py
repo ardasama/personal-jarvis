@@ -217,3 +217,42 @@ def missing_traits(pack_id: str, persona: Any) -> list[str]:
 
 
 __all__ += ["PACK_TRAITS", "character_for_pack", "missing_traits", "pack_traits"]
+
+
+# ---------------------------------------------------------------------------
+# The pack's professional metadata: what the work costs and what it must prove.
+#
+# Kept beside the packs (not inside SkillPack) so an existing field can never be
+# broken by a metadata change - and so a caller that only wants the skills keeps
+# working unchanged.
+# ---------------------------------------------------------------------------
+
+#: category hints the pack's skills should carry; token budget for the whole
+#: pack's instructions; whether the role may act without evidence.
+PACK_META: dict[str, dict[str, Any]] = {
+    "assistant": {"categories": ("general",), "token_budget": 1500, "requires_evidence": False},
+    "engineer": {"categories": ("engineering",), "token_budget": 6000, "requires_evidence": True},
+    "auditor": {
+        "categories": ("review", "security"),
+        "token_budget": 6000,
+        "requires_evidence": True,
+    },
+    "researcher": {"categories": ("research",), "token_budget": 4000, "requires_evidence": True},
+    "executive": {"categories": ("planning",), "token_budget": 3000, "requires_evidence": True},
+    "operator": {"categories": ("operations",), "token_budget": 3000, "requires_evidence": False},
+    "teacher": {"categories": ("general",), "token_budget": 2500, "requires_evidence": False},
+}
+
+
+def pack_meta(pack_id: str) -> dict[str, Any]:
+    """The pack's metadata merged over safe defaults.
+
+    An unknown role gets the everyday profile - never a specialist's budget or
+    its evidence requirements, which are stricter on purpose.
+    """
+    meta = dict(PACK_META.get("assistant", {}))
+    meta.update(PACK_META.get(str(pack_id or "").strip(), {}))
+    return meta
+
+
+__all__ += ["PACK_META", "pack_meta"]

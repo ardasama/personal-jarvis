@@ -124,3 +124,21 @@ def test_the_pack_traits_are_real_ingredients_of_the_catalogue() -> None:
         assert traits, f"{pack_id} declares no character"
         unknown = [t for t in traits if t not in TRAITS]
         assert not unknown, f"{pack_id} needs traits that do not exist: {unknown}"
+
+
+def test_the_professional_metadata_is_complete_and_sane() -> None:
+    from jarvis.skills.packs import PACK_META, PACKS, pack_meta  # noqa: PLC0415
+
+    for pack_id in PACKS:
+        meta = pack_meta(pack_id)
+        assert meta["categories"], f"{pack_id} declares no category"
+        assert 500 <= int(meta["token_budget"]) <= 20_000
+        assert isinstance(meta["requires_evidence"], bool)
+    assert set(PACK_META) <= set(PACKS)
+
+
+def test_an_unknown_role_gets_the_everyday_profile() -> None:
+    from jarvis.skills.packs import pack_meta  # noqa: PLC0415
+
+    assert pack_meta("ghost") == pack_meta("assistant")
+    assert pack_meta("ghost")["requires_evidence"] is False
