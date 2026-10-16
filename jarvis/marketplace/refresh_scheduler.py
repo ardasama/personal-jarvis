@@ -15,6 +15,7 @@ import random
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
+from typing import Any
 
 from jarvis.marketplace.auth.base import AuthHandler
 from jarvis.marketplace.credential_lock import refresh_lock, storage_lock
@@ -138,6 +139,124 @@ def _keep_alive_due(tokens: object, keep_alive_seconds: int | None) -> bool:
     if last.tzinfo is None:
         last = last.replace(tzinfo=UTC)
     return (datetime.now(UTC) - last).total_seconds() >= keep_alive_seconds
+
+
+# --- Backoff for a refresh that keeps failing "transiently" -----------------
+#
+# Forensic 2026-10-15 (live log): one Slack connection logged
+# "refresh failed (transient, will retry): provider request failed" **79 times**
+# at the ordinary ~4-5 minute cadence, for hours, with no escalation and no
+# user-visible signal.
+#
+# The mechanism is structural, not Slack-specific. `sanitize_provider_error()`
+# (marketplace/auth/base.py) replaces the provider's error body with fixed
+# product text so no credential can leak, and everything it does not map
+# collapses to the generic literal "provider request failed".
+# `reauth_reason_for()` classifies by scanning for its own markers, finds none
+# in that literal, and returns None -- which this module defines as "transient,
+# retry next cycle". A permanently broken grant is therefore indistinguishable
+# from a momentary network blip and is retried forever. base.py already carries
+# the same lesson from Google ("Unmapped, they fell through to the generic text
+# and the refresh retried forever as transient").
+#
+# Escalating straight to `needs_reauth` would stop the hammering but would also
+# push recovery of a real outage out to the daily self-heal probe -- exactly the
+# stranded-grant trap `_self_heal_due` warns about. So the retry interval is
+# widened instead: the grant keeps healing itself quickly if the provider comes
+# back, and a permanently dead one stops costing a request every few minutes.
+_TRANSIENT_FAIL_STREAK_KEY = "transient_refresh_fail_streak"
+_TRANSIENT_FAIL_AT_KEY = "transient_refresh_fail_at"
+
+#: Consecutive transient failures still retried at the normal cadence. A single
+#: blip (expired access token racing a restart) must not start backing off.
+_TRANSIENT_FAILURE_GRACE = 2
+
+#: The interval the widening starts from -- the ordinary cycle cadence.
+_TRANSIENT_BACKOFF_BASE_SECONDS = 300
+
+#: Ceiling. The daily self-heal probe still covers anything the backoff defers.
+_TRANSIENT_BACKOFF_MAX_SECONDS = 6 * 3600
+
+
+def transient_fail_streak(tokens: object) -> int:
+    """Consecutive transient refresh failures recorded on ``tokens``, or 0.
+
+    A malformed value reads as 0 (no backoff): an unreadable counter must never
+    silence a connection's retries.
+    """
+    extra = getattr(tokens, "extra", None) or {}
+    try:
+        return max(0, int(extra.get(_TRANSIENT_FAIL_STREAK_KEY, 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def transient_backoff_seconds(streak: int) -> float:
+    """Seconds to wait before the next attempt after ``streak`` failures.
+
+    ``0`` inside the grace window; then 300, 600, 1200, ... up to the ceiling.
+    """
+    if streak <= _TRANSIENT_FAILURE_GRACE:
+        return 0.0
+    over = streak - _TRANSIENT_FAILURE_GRACE
+    widened = _TRANSIENT_BACKOFF_BASE_SECONDS * (2 ** (over - 1))
+    return float(min(widened, _TRANSIENT_BACKOFF_MAX_SECONDS))
+
+
+def _transient_backoff_due(tokens: object) -> bool:
+    """Whether a repeatedly-failing connection may be retried yet.
+
+    The stamp is written when a failure is recorded, so a process that dies
+    mid-flight cannot make the next cycle retry immediately.
+    """
+    extra = getattr(tokens, "extra", None) or {}
+    backoff = transient_backoff_seconds(transient_fail_streak(tokens))
+    if backoff <= 0:
+        return True
+    last = extra.get(_TRANSIENT_FAIL_AT_KEY)
+    if not last:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except (TypeError, ValueError):
+        return True
+    if last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - last_dt).total_seconds() >= backoff
+
+
+def _transient_failure_stamp(tokens: Tokens) -> Tokens:
+    """``tokens`` with one more consecutive transient failure recorded."""
+    return dataclasses.replace(
+        tokens,
+        extra={
+            **tokens.extra,
+            _TRANSIENT_FAIL_STREAK_KEY: transient_fail_streak(tokens) + 1,
+            _TRANSIENT_FAIL_AT_KEY: datetime.now(UTC).isoformat(),
+        },
+    )
+
+
+def _note_transient_failure(
+    plugin_id: str, store: TokenStore, current: Tokens
+) -> None:
+    """Record a transient failure so the next retry is widened.
+
+    Best-effort: a storage failure here must not change the refresh outcome the
+    caller already decided on.
+    """
+    try:
+        _save_if_current(store, plugin_id, current, _transient_failure_stamp(current))
+    except Exception as exc:  # noqa: BLE001 - isolate one plugin's storage
+        log.warning("plugin %s transient-failure stamp failed: %s", plugin_id, exc)
+
+
+def _clear_transient_failures(extra: dict[str, Any]) -> dict[str, Any]:
+    """``extra`` without the backoff counters -- called on a successful refresh."""
+    cleared = dict(extra)
+    cleared.pop(_TRANSIENT_FAIL_STREAK_KEY, None)
+    cleared.pop(_TRANSIENT_FAIL_AT_KEY, None)
+    return cleared
 
 
 def flag_for_reauth(tokens: Tokens, reason: str) -> Tokens:
@@ -366,6 +485,12 @@ async def _refresh_plugin_token_locked(
     # A self-heal probe is due by definition -- its access token expired long
     # ago, and the whole point is to test the refresh token behind it.
     if not force and not self_heal:
+        if not _transient_backoff_due(tokens):
+            # A refresh that keeps failing for an unclassifiable reason is being
+            # retried less often (see the backoff block above). `usable=False`:
+            # the access token this retry exists to renew is still stale, so
+            # claiming otherwise would be a false success.
+            return RefreshAttempt(SKIPPED, usable=False)
         due = tokens.is_near_expiry(threshold_seconds) or _keep_alive_due(
             tokens, keep_alive_seconds
         )
@@ -397,6 +522,8 @@ async def _refresh_plugin_token_locked(
                 plugin_id,
                 exc,
             )
+            if _current is not None:
+                _note_transient_failure(plugin_id, store, _current)
             return RefreshAttempt(FAILED)
 
         current, superseded = _reload_before_refresh_commit(plugin_id, store, original_state)
@@ -429,11 +556,13 @@ async def _refresh_plugin_token_locked(
         return superseded
     assert current is not None
 
-    merged_extra = {
-        **current.extra,
-        **refreshed.extra,
-        "last_refreshed": datetime.now(UTC).isoformat(),
-    }
+    merged_extra = _clear_transient_failures(
+        {
+            **current.extra,
+            **refreshed.extra,
+            "last_refreshed": datetime.now(UTC).isoformat(),
+        }
+    )
     saved = dataclasses.replace(
         refreshed,
         refresh=refreshed.refresh or current.refresh,
