@@ -327,6 +327,27 @@ _CONFABULATION_MARKERS: tuple[str, ...] = (
     "sonnig",
 )
 
+def _looks_like_a_text_tool_call(text: str) -> bool:
+    """True when the reply IS a tool call, serialized into the text field.
+
+    Live 2026-10-16: two coder models answered the tool request with
+    ``{"name": "get_weather", "arguments": {"city": "Istanbul"}}`` as CONTENT.
+    That is a real attempt in the wrong channel — Ollama's chat API executes
+    only structured ``tool_calls``, so the call never happens. Naming it
+    honestly matters: "no tool call" would hide that the model knows what to
+    do, and "confabulation" would accuse it of inventing a result it never
+    claimed.
+    """
+    lowered = text.lower()
+    if any(marker in lowered for marker in ("<tool_call>", "[tool_call]", "<|tool_call|>")):
+        return True
+    if not text.strip().startswith("{"):
+        return False
+    named = any(key in lowered for key in ('"name"', "'name'", "name:"))
+    argumented = "argument" in lowered or "parameter" in lowered
+    return named and argumented
+
+
 def classify_probe_response(payload: Any) -> tuple[bool | None, str, str]:
     """What one native ``/api/chat`` answer says about tool calling.
 
@@ -350,6 +371,12 @@ def classify_probe_response(payload: Any) -> tuple[bool | None, str, str]:
     text = str(message.get("content") or "").strip()
     if not text:
         return None, "empty_reply", ""
+    if _looks_like_a_text_tool_call(text):
+        return (
+            False,
+            "tool_call_as_text",
+            f"wrote the call as text instead of calling it: {text[:200]}",
+        )
     lowered = text.lower()
     if any(marker in lowered for marker in _CONFABULATION_MARKERS):
         return (
@@ -415,15 +442,18 @@ async def _tool_probe(root: str) -> Check:
             "reason": reason,
             "declared": sorted(declared),
         }
-        if capable is not None:
-            tool_probe_store.write_verdict(
-                "ollama",
-                model.name,
-                capable=capable,
-                reason=reason,
-                evidence=evidence,
-                digest=model.digest or None,
-            )
+        # Record EVERY attempt, including one that proved nothing: ``capable``
+        # stays null for those, so the gate ignores it, but the reason and the
+        # evidence remain auditable. "Tried and learned nothing" must not look
+        # like "never tried".
+        tool_probe_store.write_verdict(
+            "ollama",
+            model.name,
+            capable=capable,
+            reason=reason,
+            evidence=evidence,
+            digest=model.digest or None,
+        )
 
     if not results:
         return Check(
@@ -434,32 +464,32 @@ async def _tool_probe(root: str) -> Check:
         )
     refuted = sorted(n for n, r in results.items() if r["capable"] is False)
     unproven = sorted(n for n, r in results.items() if r["capable"] is None)
+    confirmed = len(results) - len(refuted) - len(unproven)
     facts = {"server": root, "results": results, "store": str(tool_probe_store.probe_path())}
+    if not refuted and not unproven:
+        return Check(
+            "tool-probe",
+            OK,
+            f"Every tool-declaring download called the tool ({confirmed} measured).",
+            facts,
+        )
     # WARN, not FAIL: a model that overstates itself is a normal (if
     # disappointing) download, and the gate now handles it — the exit code is
     # reserved for a genuinely broken install.
+    parts: list[str] = []
     if refuted:
-        return Check(
-            "tool-probe",
-            WARN,
-            f"{len(refuted)} download(s) declare tool support but never called the "
-            f"tool: {', '.join(refuted)}. The runtime gate now hides tools from "
-            f"them; re-run after a re-pull or a model update.",
-            facts,
+        parts.append(
+            f"{len(refuted)} declare tool support but never called the tool: "
+            f"{', '.join(refuted)} — the runtime gate now hides tools from them; "
+            f"re-run after a re-pull or a model update"
         )
     if unproven:
-        return Check(
-            "tool-probe",
-            WARN,
-            f"{len(unproven)} download(s) could not be measured and keep their "
-            f"declaration: {', '.join(unproven)}.",
-            facts,
+        parts.append(
+            f"{len(unproven)} could not be measured and keep their declaration: "
+            f"{', '.join(unproven)}"
         )
     return Check(
-        "tool-probe",
-        OK,
-        f"Every tool-declaring download called the tool ({len(results)} measured).",
-        facts,
+        "tool-probe", WARN, f"{'; '.join(parts)}. {confirmed} confirmed capable.", facts
     )
 
 

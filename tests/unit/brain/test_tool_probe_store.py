@@ -103,6 +103,22 @@ def test_the_write_leaves_no_temp_files_behind(store_path: Path) -> None:
     assert leftovers == []
 
 
+def test_an_unproven_attempt_is_audited_but_never_gates(store_path: Path) -> None:
+    """``capable=None`` means "tried, learned nothing".
+
+    Only a recorded boolean may gate a model, so an unproven attempt cannot
+    hide a model's tools — but its reason stays visible, because "we tried and
+    learned nothing" must not look the same as "we never tried".
+    """
+    store.write_verdict("ollama", "m", capable=None, reason="empty_reply", evidence="")
+    assert store.verdict_for("ollama", "m") is None
+    assert store.reason_for("ollama", "m") == "empty_reply"
+    assert store.entries()["ollama/m"]["capable"] is None
+    # A later real measurement replaces the audit-only entry.
+    store.write_verdict("ollama", "m", capable=True, reason="tool_calls")
+    assert store.verdict_for("ollama", "m") is True
+
+
 def test_blank_identifiers_are_refused(store_path: Path) -> None:
     assert store.write_verdict("", "m", capable=True, reason="tool_calls") is None
     assert store.verdict_for("ollama", "") is None

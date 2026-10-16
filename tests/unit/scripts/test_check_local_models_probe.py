@@ -62,6 +62,27 @@ def test_a_fabricated_result_is_not_capable() -> None:
     assert "without calling" in evidence
 
 
+def test_a_call_written_as_text_is_named_honestly() -> None:
+    """Live 2026-10-16: two coder models put the call in the CONTENT field.
+
+    Not "no tool call" (that would hide that they know what to do) and not
+    "confabulation" (they never claimed a result). The call simply never
+    happens, because the chat API executes only structured tool_calls.
+    """
+    module = _load()
+    capable, reason, evidence = module.classify_probe_response(
+        {
+            "message": {
+                "role": "assistant",
+                "content": '{"name": "get_weather", "arguments": {"city": "Istanbul"}}',
+            }
+        }
+    )
+    assert capable is False
+    assert reason == "tool_call_as_text"
+    assert "as text" in evidence
+
+
 def test_a_plain_answer_without_a_call_is_not_capable() -> None:
     module = _load()
     capable, reason, _ = module.classify_probe_response(
@@ -104,6 +125,7 @@ class _Snapshot:
     models: tuple[_Model, ...] = (
         _Model("liar:8b", ("completion", "tools"), "sha256:liar"),
         _Model("honest:4b", ("completion", "tools"), "sha256:honest"),
+        _Model("silent:8b", ("completion", "tools"), "sha256:silent"),
         _Model("chatonly:1b", ("completion",)),
     )
 
@@ -124,6 +146,9 @@ def _probe_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     answers: dict[str, tuple[bool | None, str, str]] = {
         "liar:8b": (False, "confabulation", "stated a result without calling"),
         "honest:4b": (True, "tool_calls", "called get_weather"),
+        # An attempt that proved nothing: it must not gate, but it must be
+        # visible in the audit — "tried and learned nothing" is not "never tried".
+        "silent:8b": (None, "empty_reply", ""),
     }
     seen: list[str] = []
 
@@ -143,15 +168,21 @@ async def test_only_measured_verdicts_are_recorded(_probe_env: ModuleType) -> No
     check = await _probe_env._tool_probe("http://127.0.0.1:11434")
 
     # A model that declares no tools was never probed: no cost, no verdict.
-    assert _probe_env._seen == ["liar:8b", "honest:4b"]
+    assert _probe_env._seen == ["liar:8b", "honest:4b", "silent:8b"]
     assert store.verdict_for("ollama", "liar:8b") is False
     assert store.verdict_for("ollama", "honest:4b") is True
     assert store.verdict_for("ollama", "chatonly:1b") is None
     assert store.reason_for("ollama", "liar:8b") == "confabulation"
+    # The unproven attempt is audited but gates nothing.
+    assert store.verdict_for("ollama", "silent:8b") is None
+    assert store.entries()["ollama/silent:8b"]["capable"] is None
+    assert store.reason_for("ollama", "silent:8b") == "empty_reply"
     # WARN, not FAIL: a model that overstates itself is a normal download and
     # the gate now handles it — the exit code is for a broken install.
     assert check.status == _probe_env.WARN
     assert "liar:8b" in check.detail
+    assert "could not be measured" in check.detail
+    assert "silent:8b" in check.detail
     assert check.facts["store"].endswith("model_tool_probe.json")
 
 

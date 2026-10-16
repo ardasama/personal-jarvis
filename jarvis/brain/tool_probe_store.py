@@ -105,12 +105,18 @@ def write_verdict(
     provider: str,
     model: str,
     *,
-    capable: bool,
+    capable: bool | None,
     reason: str,
     evidence: str = "",
     digest: str | None = None,
 ) -> Path | None:
-    """Record one measured verdict, atomically. Never raises.
+    """Record one probe OUTCOME, atomically. Never raises.
+
+    ``capable=None`` records an attempt that proved NOTHING (a timeout, an empty
+    reply, a probe that could not run). It is an audit entry only —
+    ``verdict_for`` never returns a non-boolean, so it cannot gate a model —
+    but its reason stays visible, so "we tried and learned nothing" is not
+    silently the same as "we never tried".
 
     Returns the store path on success, ``None`` when the write failed — a probe
     that cannot persist its finding must say so, not pretend it was saved.
@@ -123,7 +129,7 @@ def write_verdict(
 
         data = _read(path)
         entry: dict[str, Any] = {
-            "capable": bool(capable),
+            "capable": capable if isinstance(capable, bool) else None,
             "reason": str(reason),
             "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }

@@ -73,9 +73,11 @@ from jarvis.core.protocols import (
     BrainMessage,
     BrainRequest,
     CostRecord,
+    ExecutionContext,
     ImageBlock,
     ReasoningEffort,
     Tool,
+    ToolResult,
 )
 from jarvis.brain.turn_override import TurnOverride
 from jarvis.core.redact import safe_preview
@@ -6774,6 +6776,32 @@ class BrainManager:
             tools, context_window=window, used_tokens=used, keep=keep, max_tools=max_tools
         )
         if dropped:
+            # Give up NO hands before compressing them. A connected server's
+            # schemas are the trim's first victims, and hiding all 92 left a
+            # local model with no tools at all (live 2026-10-16: "92 of 92
+            # hidden", budget for tools 0). One façade per server keeps every
+            # one of them reachable for a fraction of the tokens, so folding
+            # comes first and the trim becomes the second resort.
+            folded, groups = _fold_mcp_surface(
+                tools,
+                context_window=window,
+                used_tokens=used,
+                keep=keep,
+                max_tools=max_tools,
+            )
+            if groups:
+                log.info(
+                    "Tool surface collapsed for %s: %d connected-server group(s) "
+                    "behind one façade each (%d of %d tools still hidden) so the "
+                    "request fits the %d-token window (prompt+history ~%d tokens).",
+                    getattr(brain, "name", type(brain).__name__),
+                    groups,
+                    len(tools) - len(folded),
+                    len(tools),
+                    window,
+                    used,
+                )
+                return folded
             log.warning(
                 "Tool surface trimmed for %s: %d of %d tools hidden this turn so "
                 "the request fits the model's %d-token window and %s-tool cap "
@@ -14059,6 +14087,231 @@ def _fit_tools_to_context_window(
         dropped.append(name)
     gone = set(dropped)
     return {name: tool for name, tool in tools.items() if name not in gone}, dropped
+
+
+#: Risk tiers, weakest first — the order a façade's inherited tier is read in.
+_RISK_TIER_ORDER: tuple[str, ...] = ("safe", "monitor", "ask", "block")
+
+
+def _risk_rank(tier: Any) -> int:
+    """Index of a tier in the vocabulary; an unknown string ranks weakest."""
+    try:
+        return _RISK_TIER_ORDER.index(str(tier))
+    except ValueError:
+        return 0
+
+
+class MCPToolFacade:
+    """A connected MCP server's whole tool set behind ONE tool.
+
+    A server's schemas are the first thing a small window drops (see
+    ``_fit_tools_to_context_window``): 131 tools from three servers cost more
+    than a 32k budget (live 2026-08-27), and a local model ended up with ZERO
+    tools — "92 of 92 hidden", budget for tools 0 (live 2026-10-16). The
+    façade keeps that server reachable at the price of one tool: the model
+    names the member tool and passes its arguments, and the call is delegated
+    to the real adapter, so nothing about the server changes.
+
+    ``is_mcp_tool`` is deliberately **False**. That flag means "an
+    individually droppable server addition" and is the trim's first victim; a
+    façade is the compressed form that must survive so the server stays
+    reachable. It is ``is_action_tool`` like the tools it stands in for.
+
+    Safety: ``risk_tier`` is the HIGHEST member tier, and ``risk_tier_for_args``
+    resolves the SELECTED member's own tier (its per-call hook when it has
+    one). A façade therefore can never downgrade a decision its members would
+    have made.
+    """
+
+    is_action_tool: bool = True
+    is_mcp_tool: bool = False
+    is_mcp_facade: bool = True
+
+    def __init__(self, server: str, members: Sequence[Any]) -> None:
+        self.server = str(server)
+        self._members: dict[str, Any] = {}
+        for member in members:
+            short = str(getattr(member, "name", "")).split("/", 1)[-1].strip()
+            if short:
+                self._members[short] = member
+        self.name = f"{self.server}/_tools"
+        tiers = [getattr(m, "risk_tier", None) for m in self._members.values()]
+        known = [str(t) for t in tiers if str(t) in _RISK_TIER_ORDER]
+        # No member tier at all is not "safe": fall back to the house default.
+        self.risk_tier = max(known, key=_risk_rank) if known else "monitor"
+        listing = ", ".join(sorted(self._members)) or "none"
+        self.description = (
+            f"[ACTION-ONLY · MCP: {self.server}] Call ONE tool of the connected "
+            f"{self.server} system by name. Set 'tool' to the tool you need and "
+            f"'arguments' to that tool's own argument object. Available tools: "
+            f"{listing}. USE ONLY for targeted actions, NOT for general research "
+            f"about {self.server} as a topic — use search_web for that."
+        )
+        self.schema = {
+            "type": "object",
+            "properties": {
+                "tool": {
+                    "type": "string",
+                    "enum": sorted(self._members),
+                    "description": f"Which {self.server} tool to call.",
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": (
+                        "Arguments for the chosen tool, as that tool's own "
+                        "schema defines them."
+                    ),
+                },
+            },
+            "required": ["tool"],
+        }
+
+    @property
+    def member_names(self) -> tuple[str, ...]:
+        """The member MCP tool names this façade stands in for."""
+        return tuple(sorted(self._members))
+
+    def _member_for(self, args: Any) -> Any | None:
+        if not isinstance(args, dict):
+            return None
+        return self._members.get(str(args.get("tool") or "").strip())
+
+    def risk_tier_for_args(self, args: dict[str, Any]) -> Any:
+        """The SELECTED member's tier — never weaker than the static one."""
+        member = self._member_for(args)
+        if member is None:
+            # An unknown member is refused by execute(); until then the
+            # inherited (highest) tier stands.
+            return self.risk_tier
+        hook = getattr(member, "risk_tier_for_args", None)
+        if callable(hook):
+            try:
+                return hook((args or {}).get("arguments") or {})
+            except Exception:  # noqa: BLE001 — a broken hook must not widen access
+                log.debug(
+                    "MCP façade %s: member %r tier hook failed",
+                    self.name,
+                    args.get("tool"),
+                    exc_info=True,
+                )
+        return getattr(member, "risk_tier", None) or self.risk_tier
+
+    async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
+        """Delegate to the named member tool; an unknown name is an honest error."""
+        short = str((args or {}).get("tool") or "").strip()
+        member = self._members.get(short)
+        if member is None:
+            return ToolResult(
+                success=False,
+                output=None,
+                error=(
+                    f"Unknown tool {short!r} for the connected {self.server} "
+                    f"system. Available: {', '.join(sorted(self._members)) or 'none'}."
+                ),
+            )
+        call_args = (args or {}).get("arguments")
+        if call_args is None:
+            call_args = {}
+        if not isinstance(call_args, dict):
+            return ToolResult(
+                success=False,
+                output=None,
+                error=(
+                    f"'arguments' for {self.server}/{short} must be an object, "
+                    f"got {type(call_args).__name__}."
+                ),
+            )
+        return await member.execute(call_args, ctx)
+
+
+def _mcp_server_of(name: str, tool: Any) -> str | None:
+    """The connected server a tool belongs to, from its namespaced name."""
+    if not getattr(tool, "is_mcp_tool", False) or getattr(tool, "is_mcp_facade", False):
+        return None
+    head = str(name).split("/", 1)[0].strip()
+    return head or None
+
+
+def _fold_largest_mcp_group(tools: dict[str, Tool]) -> dict[str, Tool] | None:
+    """Replace the LARGEST connected-server group with one façade, or ``None``.
+
+    Returns a new mapping (registry order preserved, the façade standing where
+    the group's first tool stood) when a server still exposes two or more
+    individual tools. A façade name already taken by a real tool — a server
+    that genuinely offers ``_tools`` — makes that group unfoldable rather than
+    double-named; the next-largest group is tried instead.
+    """
+    groups: dict[str, list[str]] = {}
+    for name, tool in tools.items():
+        server = _mcp_server_of(name, tool)
+        if server:
+            groups.setdefault(server, []).append(name)
+    candidates = sorted(
+        ((server, names) for server, names in groups.items() if len(names) >= 2),
+        key=lambda item: (-len(item[1]), item[0]),
+    )
+    for server, names in candidates:
+        facade_name = f"{server}/_tools"
+        if facade_name in tools:
+            log.debug(
+                "MCP façade: %s already offers %r — leaving that server unfolded.",
+                server,
+                facade_name,
+            )
+            continue
+        members = [tools[n] for n in names]
+        folded: dict[str, Tool] = {}
+        replaced = set(names)
+        placed = False
+        for name, tool in tools.items():
+            if name in replaced:
+                if not placed:
+                    folded[facade_name] = MCPToolFacade(server, members)
+                    placed = True
+                continue
+            folded[name] = tool
+        return folded
+    return None
+
+
+def _fold_mcp_surface(
+    tools: dict[str, Tool],
+    *,
+    context_window: int,
+    used_tokens: int,
+    keep: Iterable[str],
+    max_tools: int,
+) -> tuple[dict[str, Tool], int]:
+    """Fold server groups into façades, largest first, until the surface fits.
+
+    Returns ``(surface, groups_folded)``. Folding stops the moment the request
+    fits, so a server whose schemas already fit keeps them — compression is a
+    last resort, not a new default.
+
+    ``groups_folded`` is ``0`` (and ``surface`` is the ORIGINAL mapping) when
+    folding did not make the request fit. The caller then keeps its usual trim,
+    so a surface that fits neither way behaves exactly as it did before this
+    feature existed — folding can only ever WIN capabilities, never reshuffle
+    which ones are lost.
+    """
+    surface = tools
+    folded_groups = 0
+    while True:
+        step = _fold_largest_mcp_group(surface)
+        if step is None:
+            break
+        surface = step
+        folded_groups += 1
+        fitted, dropped = _fit_tools_to_context_window(
+            surface,
+            context_window=context_window,
+            used_tokens=used_tokens,
+            keep=keep,
+            max_tools=max_tools,
+        )
+        if not dropped:
+            return fitted, folded_groups
+    return tools, 0
 
 
 #: Wordings with which providers refuse a request larger than the model's
