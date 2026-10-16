@@ -8,11 +8,13 @@ All three use the Chat-Completions format. Differences:
 from __future__ import annotations
 
 import inspect
+import ipaddress
 import json
 import logging
 import re
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -29,6 +31,75 @@ log = logging.getLogger(__name__)
 #: stall guard) while connect stays at 5 s so a dead endpoint fast-fails and the
 #: chain moves on (Wave-3 latency fix).
 CLIENT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=30.0)
+
+#: A LOCAL server that is cold-loading a model may delay the TCP connection for
+#: seconds after the fast-fail connect budget (2 s on the local brains, 5 s
+#: here) has expired. One retry gets this budget instead of declaring the turn
+#: lost. Only local endpoints qualify — see ``_is_local_endpoint``.
+_COLD_START_CONNECT_TIMEOUT_S = 12.0
+
+
+def _is_connect_timeout(exc: BaseException) -> bool:
+    """Whether the failure was the TCP connect itself, not the response.
+
+    The OpenAI SDK wraps every httpx timeout in ``APITimeoutError`` whose
+    message is the unhelpful "Request timed out." — the same text for a connect
+    that never happened and for a generation that ran long. The cause chain is
+    the only place the difference survives (probe-verified 2026-10-16:
+    ``APITimeoutError`` → ``httpx.ConnectTimeout`` → ``httpcore.ConnectTimeout``).
+    """
+    current: BaseException | None = exc
+    for _ in range(8):  # bounded: a self-referencing chain must not hang
+        if current is None:
+            return False
+        if isinstance(current, httpx.ConnectTimeout):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _is_local_endpoint(base_url: str) -> bool:
+    """Whether *base_url* addresses this machine's own network.
+
+    A cloud endpoint that accepts no connection in 5 s is genuinely
+    unreachable and must keep fast-failing so the chain moves on (AP-22); only
+    a local/private endpoint gets the cold-start retry. A LAN *hostname* cannot
+    be classified without a DNS lookup, so it stays out — the cost of being
+    wrong there is one lost local turn, never a slower cloud chain.
+    """
+    host = (urlparse(base_url).hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in ("localhost", "host.docker.internal") or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
+def _local_endpoint_cold_start_timeout(client: Any) -> httpx.Timeout | None:
+    """The client's own timeout with a cold-start connect budget, or ``None``.
+
+    ``None`` means "do not retry": a non-local endpoint, a client without an
+    httpx timeout, or a connect budget already at least this wide. Every other
+    field keeps the client's value, so the retry never widens the response
+    budget.
+    """
+    if not _is_local_endpoint(str(getattr(client, "base_url", "") or "")):
+        return None
+    current = getattr(client, "timeout", None)
+    if not isinstance(current, httpx.Timeout):
+        return None
+    if current.connect is not None and current.connect >= _COLD_START_CONNECT_TIMEOUT_S:
+        return None
+    return httpx.Timeout(
+        connect=_COLD_START_CONNECT_TIMEOUT_S,
+        read=current.read,
+        write=current.write,
+        pool=current.pool,
+    )
 
 
 _STREAM_OPTIONS_WARNING_EMITTED = False
@@ -988,6 +1059,25 @@ async def _create_with_token_param_retry(client: Any, kwargs: dict[str, Any]) ->
             # handling — never ours.
             raise
         except Exception as exc:  # noqa: BLE001 — inspect, adapt, or re-raise
+            # A connect timeout is not a transport verdict when the endpoint is
+            # on this machine: a local server accepts no connection while it
+            # cold-loads a model. Live 2026-10-15 23:05: the ollama turn read
+            # "Request timed out." two seconds after the tool-surface log — and
+            # afterwards /api/tags answered in 113 ms with the same model
+            # present, i.e. the server was up and merely cold. One retry with a
+            # cold-start connect budget; every other failure still fast-fails.
+            if "timeout" not in current_kwargs and _is_connect_timeout(exc):
+                cold_start = _local_endpoint_cold_start_timeout(client)
+                if cold_start is not None:
+                    log.info(
+                        "connect to %s timed out inside the fast-fail window — "
+                        "retrying once with a cold-start connect budget "
+                        "(a local server loading a model accepts nothing yet).",
+                        str(getattr(client, "base_url", "") or "the endpoint"),
+                    )
+                    current_kwargs = dict(current_kwargs)
+                    current_kwargs["timeout"] = cold_start
+                    continue
             retry = _compatible_retry_kwargs(exc, current_kwargs, adaptations)
             if retry is None:
                 raise
