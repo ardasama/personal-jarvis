@@ -276,3 +276,52 @@ Opt-in: `--eval` / `--eval-for TAG[,TAG]`. **Verified:** 28 new tests,
    The remaining work is the BRIDGE, not new machinery.
 3. Push/land: 10 commits sit on the branch; `origin/main` is not available
    locally, so landing needs the user's decision.
+
+## Cycles 11-12 - the landing half, and the load failure  (IMPLEMENTED, TESTED)
+
+### Cycle 11 - an approved mission can finally land   (`dac91de`)
+**Finding.** The mission engine is complete end to end (worktree isolation,
+critic, path guard, approvals, state machine, recovery) EXCEPT the last step:
+nothing brought an APPROVED mission's diff back into the product tree, so a
+self-improvement loop could never close. `jarvis/missions/land.py` is that
+step. Guards first, then a plain `git apply`; every touched file is copied to a
+uniquely named backup BEFORE the patch, and a failed patch restores all of
+them. Refusals: not APPROVED, empty/unenumerable (truncated) diff, a blocked
+path (the mission's own `path_guard`), a path escaping the repo root, a binary
+patch, a file deletion, a missing target, or a target already dirty in the
+SHARED working tree. `git apply` is never `--force`, never `--3way`, never a
+merge or a rebase. Nothing is deleted; backup directories are FIFO-capped at
+the ten most recent landings; the audit line records paths, counts and the
+outcome, never file contents.
+**Verified.** 16 tests, all offline (injected git runner, temp DATA_DIR); 84
+related mission tests pass; ruff clean.
+
+### Cycle 12 - a model that cannot load is not a network problem   (`77b30ef`)
+**Finding (live, and it explains an earlier anomaly).** `deepseek-r1:8b`
+answered EVERY request with HTTP 500; the body named the cause:
+"llama-server reported out-of-memory during startup: cudaMalloc failed ... failed
+to allocate buffer for kv cache" (a 3.76 GB KV buffer). That tag declares NO
+`num_ctx`, so llama-server asks for its native context and dies on this 8 GB
+card; its own `-16k` variant caps it at 16384 and answers fine. The chain read
+that as a generic `call_fail`, so the spoken cause was "unreachable - check the
+network" for a model that never started.
+**Change.** A new classification `model_too_large` recognises a local server's
+load-failure wording and gets its own de/en/es phrase naming the FIT. It is NOT
+dead-listed: a re-pull or a capped-context variant fixes it in-app.
+**Verified.** 7 new tests (40 in the file); 92 tests in the classifier slice.
+
+### Cycle 12b - the eval loads once, unloads once   (`050dbc0`)
+The eval sent `keep_alive: 0` per case, so five cases paid five cold loads (an
+8B load is ~85 s). Cases now keep the model resident; `run_model_eval` unloads
+it once at the end. **Verified.** 29 tests in the suite.
+
+**Live local-model scorecard (recorded):** `qwen3.5:4b` 5/5 + calls tools;
+`deepseek-r1:8b` 0/0 (could not be asked - HTTP 500/OOM); `deepseek-r1:8b-16k`
+loads but confabulates a tool result; `qwen2.5-coder:7b` / `-16k` write the call
+as TEXT instead of calling it.
+
+**Next action.** (1) Wire `land` to the mission approve flow so an approval
+lands the work and the refusal reasons reach the user. (2) Wave D: restart the
+app and exercise the changed brain path in a real turn. (3) `_format_provider_chain_error`
+has no explicit bucket for `model_too_large`, so the developer log line still
+groups it as "other" - cosmetic, log-only.
