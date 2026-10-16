@@ -1,4 +1,4 @@
-﻿"""BrainManager: Intent-Router + Smart-Fallback + Pipeline-Adapter.
+"""BrainManager: Intent-Router + Smart-Fallback + Pipeline-Adapter.
 
 Architecture:
 
@@ -3767,6 +3767,23 @@ class BrainManager:
             system_prompt = f"{system_prompt}\n\n{cards}"
         if delegated_voice:
             system_prompt = f"{system_prompt}\n\n{_DELEGATE_VOICE_DIRECTIVE}"
+        # The composed character for THIS moment (jarvis/persona). Identity stays
+        # with SOUL; this is only how the turn behaves, and the non-negotiable
+        # limits ride LAST so nothing above them can loosen a rule. A delegated
+        # voice turn is the product's own marker for 'this will be spoken', so the
+        # spoken turn gets the short form and a written turn the full one.
+        try:
+            from jarvis.persona.inject import block_for_turn
+
+            _character = block_for_turn(
+                text=str(getattr(self, "_turn_text", "") or ""),
+                channel="voice" if delegated_voice else "text",
+                language=str(getattr(self, "_reply_language", "") or ""),
+            )
+            if _character:
+                system_prompt = f"{system_prompt}\n\n{_character}"
+        except Exception:  # noqa: BLE001 - a character glitch must not kill the turn
+            log.debug("persona: character block skipped", exc_info=True)
         kwargs: dict[str, Any] = {}
         if max_turns is not None:
             kwargs["max_turns"] = max_turns

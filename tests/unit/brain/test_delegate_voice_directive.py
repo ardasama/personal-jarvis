@@ -45,5 +45,10 @@ def test_classic_dispatcher_prompt_stays_unchanged() -> None:
 
     dispatcher = manager._build_dispatcher(object())
 
-    assert dispatcher._system_prompt == "BASE PROMPT"
+    prompt = dispatcher._system_prompt
+    # The per-turn character rides AFTER the base prompt, and the non-negotiable
+    # limits ride LAST - so the block can never loosen a rule the product set.
+    assert prompt.startswith("BASE PROMPT")
+    assert "## Character:" in prompt
+    assert prompt.rstrip().endswith("name the blocker instead.")
     assert _DELEGATE_VOICE_DIRECTIVE not in dispatcher._system_prompt
