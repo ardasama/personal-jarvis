@@ -27,6 +27,41 @@ _RENAME_FROM = re.compile(r"^rename from (?P<path>.+)$")
 _RENAME_TO = re.compile(r"^rename to (?P<path>.+)$")
 
 
+def mission_patch_text(outputs_root: Path, mission_id: str) -> str:
+    """Every task's final patch for one mission, as TEXT.
+
+    The single place a reader gets what a mission actually changed. The
+    directory is derived from the already-authorized mission id and must stay
+    under the outputs root — the same rule ``read_mission_changes`` follows,
+    never a caller-supplied path.
+    """
+    clean_id = str(mission_id or "").strip()
+    if not _MISSION_ID_RE.fullmatch(clean_id):
+        return ""
+    root = Path(outputs_root).resolve()
+    mission_dir = (root / f"mission_{clean_id[:13]}").resolve()
+    try:
+        mission_dir.relative_to(root)
+    except ValueError:
+        return ""
+    try:
+        task_dirs = sorted(p for p in (mission_dir / "tasks").iterdir() if p.is_dir())
+    except OSError:
+        return ""
+    parts: list[str] = []
+    for task_dir in task_dirs:
+        patch = _final_patch(task_dir / "artifacts")
+        if patch is None:
+            continue
+        try:
+            text = patch.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if text.strip():
+            parts.append(text)
+    return "\n".join(parts)
+
+
 def summarize_unified_diff(text: str) -> dict[str, Any]:
     """Reduce one unified diff to ``{files, additions, deletions, truncated_files}``.
 
@@ -185,4 +220,4 @@ def read_mission_changes(outputs_root: Path, mission_id: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["read_mission_changes", "summarize_unified_diff"]
+__all__ = ["mission_patch_text", "read_mission_changes", "summarize_unified_diff"]

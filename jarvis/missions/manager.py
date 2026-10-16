@@ -202,7 +202,26 @@ class MissionManager:
                 language="de",  # in upsert ueberschreibt nur state+updated_ms (siehe SQL)
                 ts_ms=ts,
             )
+            # Wave F: an APPROVED mission lands in the product tree. Every
+            # guard (path guard, dirty target, binary, deletion, escape, backup,
+            # restore) lives in jarvis/missions/land.py; this hook only wires it
+            # and never lets a landing failure break the state machine.
+            if to_state is MissionState.APPROVED:
+                await self._maybe_land(mission_id)
             return env
+
+    async def _maybe_land(self, mission_id: str) -> None:
+        """Land an APPROVED mission's archived patch. Never raises."""
+        import logging
+
+        try:
+            from jarvis.missions.auto_land import land_approved_mission
+
+            await land_approved_mission(mission_id)
+        except Exception:  # noqa: BLE001 — landing must never break the funnel
+            logging.getLogger(__name__).warning(
+                "auto-land hook failed for %s", mission_id, exc_info=True
+            )
 
     async def mission(self, mission_id: str) -> MissionView | None:
         """Snapshot of a mission header, or None if not present."""
