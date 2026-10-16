@@ -353,6 +353,55 @@ class TestContextOverflowCause:
         assert "Netzwerk" not in text  # i18n-allow
 
 
+class TestModelTooLargeCause:
+    """Live 2026-10-16: a local model that never STARTED (HTTP 500 + OOM).
+
+    ``deepseek-r1:8b`` declares no ``num_ctx``, so llama-server asked for a
+    3.76 GB KV-cache buffer and died on an 8 GB card. The user read "check the
+    network" for a model that never loaded; its own ``-16k`` variant caps the
+    context and runs fine.
+    """
+
+    _LIVE_OOM = (
+        'Error code: 500 - {"error":"llama-server reported out-of-memory during '
+        "startup: cudaMalloc failed: out of memory\\nggml_backend_buft_alloc"
+        "_buffer_n_default: failed to allocate CUDA0 buffer of size 3758096384\\n"
+        'llama_init_from_model: failed to initialize the context: failed to '
+        'allocate buffer for kv cache"}'
+    )
+
+    def test_a_load_failure_is_not_read_as_the_network(self) -> None:
+        kind = _classify_provider_error(self._LIVE_OOM, default="call_fail")
+        assert kind == "model_too_large"
+
+    def test_it_is_not_dead_listed(self) -> None:
+        # A re-pull or a capped-context variant fixes it in-app, so neither the
+        # provider nor the model is retired for the session.
+        assert "model_too_large" not in _DEAD_LIST_KINDS
+
+    def test_a_real_network_error_keeps_the_generic_kind(self) -> None:
+        assert (
+            _classify_provider_error("Connection refused", default="call_fail")
+            == "call_fail"
+        )
+
+    def test_the_spoken_cause_names_the_fit(self) -> None:
+        errors = [("ollama", "deepseek-r1:8b", "model_too_large", self._LIVE_OOM)]
+        cause = _primary_provider_down_cause(errors)
+        assert cause == "model_too_large"
+        phrase = _provider_down_phrase("de", 0, cause)
+        assert phrase == _PROVIDER_DOWN_CAUSE_PHRASES["model_too_large"]["de"]
+        low = phrase.lower()
+        assert "netzwerk" not in low and "network" not in low
+        assert "ollama" not in low and "deepseek" not in low
+
+    @pytest.mark.parametrize("lang", ["de", "en", "es"])
+    def test_every_locale_carries_the_phrase(self, lang: str) -> None:
+        table = _PROVIDER_DOWN_CAUSE_PHRASES["model_too_large"]
+        assert table[lang].strip()
+        assert "{" not in table[lang]  # no unformatted placeholders
+
+
 class TestToolCountCap:
     """Live 2026-09-29: xAI refused 378 tools ("the maximum is 350")."""
 

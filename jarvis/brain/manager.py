@@ -2570,6 +2570,24 @@ _PROVIDER_DOWN_CAUSE_PHRASES: dict[str, dict[str, str]] = {
             "proveedor. Revisa la selección de modelo en los ajustes."
         ),
     },
+    "model_too_large": {
+        "de": (
+            "Entschuldige - dieses lokale Modell lässt sich auf diesem Rechner "  # i18n-allow
+            "nicht laden: der Speicher reicht für sein Kontextfenster nicht. "  # i18n-allow
+            "Nimm ein kleineres Modell oder eine Variante mit kleinerem "  # i18n-allow
+            "Kontext."  # i18n-allow
+        ),
+        "en": (
+            "Sorry - this local model cannot be loaded on this machine: there "
+            "is not enough memory for its context window. Pick a smaller model "
+            "or a variant with a smaller context."
+        ),
+        "es": (
+            "Lo siento: este modelo local no puede cargarse en esta máquina; no "
+            "hay memoria suficiente para su ventana de contexto. Elige un modelo "
+            "más pequeño o una variante con menos contexto."
+        ),
+    },
     "context_overflow": {
         "de": (
             "Entschuldige — diese Anfrage ist für das eingestellte Modell zu "  # i18n-allow
@@ -2639,6 +2657,7 @@ _PROVIDER_DOWN_CAUSE_PRIORITY: tuple[str, ...] = (
     "vision_unsupported",
     "invalid_model",
     "context_overflow",
+    "model_too_large",
     "rate_limit",
     "unreachable",
 )
@@ -2660,6 +2679,7 @@ def _primary_provider_down_cause(
         "vision_unsupported",
         "invalid_model",
         "context_overflow",
+        "model_too_large",
         "rate_limit",
         "skipped_cooldown",
         "empty_response",
@@ -14338,6 +14358,36 @@ def _is_context_overflow_exc(msg: str) -> bool:
     return any(marker in m for marker in _CONTEXT_OVERFLOW_MARKERS)
 
 
+#: Wordings with which a LOCAL server reports that it could not even LOAD the
+#: model — the machine's memory does not hold its context. Live 2026-10-16:
+#: ``deepseek-r1:8b`` answered every request with HTTP 500 and the body named
+#: "out-of-memory during startup: cudaMalloc failed ... failed to allocate
+#: buffer for kv cache" (a 3.76 GB KV buffer) because that tag declares NO
+#: ``num_ctx``; its own ``-16k`` variant caps it at 16384 and runs fine on the
+#: same 8 GB card. Per model, never per credential.
+_MODEL_TOO_LARGE_MARKERS: tuple[str, ...] = (
+    "out-of-memory during startup",
+    "out of memory",
+    "cudamalloc failed",
+    "failed to allocate buffer for kv cache",
+    "failed to initialize the context",
+    "unable to load model",
+    "model requires more system memory",
+    "insufficient memory",
+)
+
+
+def _is_model_too_large_exc(msg: str) -> bool:
+    """True when the model could not be LOADED for want of memory.
+
+    Until 2026-10-16 this fell through to the generic ``call_fail`` and the
+    user heard "the provider is unreachable — check the network" for a model
+    that never started. The honest cause is the fit, not the network.
+    """
+    m = msg.lower()
+    return any(marker in m for marker in _MODEL_TOO_LARGE_MARKERS)
+
+
 def _classify_provider_error(msg: str, *, default: str) -> str:
     """Central classifier for provider error strings.
 
@@ -14370,6 +14420,11 @@ def _classify_provider_error(msg: str, *, default: str) -> str:
         return "invalid_model"
     if _is_context_overflow_exc(msg):
         return "context_overflow"
+    if _is_model_too_large_exc(msg):
+        # 3c. model_too_large: a LOCAL model that could not be loaded because it
+        # does not fit this machine. Also per request/model, so not dead-listed
+        # (a re-pull or a capped-context variant fixes it in-app).
+        return "model_too_large"
     m = msg.lower()
     # Code-first terminal fallback for a 401/402 that carries the numeric HTTP code
     # but NONE of the known wordings (a bare live "Error code: 401 - invalid x-api-key"
