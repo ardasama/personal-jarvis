@@ -160,3 +160,60 @@ def resolve_pack(pack_id: str, registry: Any) -> dict[str, Any]:
 
 
 __all__ = ["PACKS", "SkillPack", "pack", "pack_for_persona", "resolve_pack"]
+
+# ---------------------------------------------------------------------------
+# The bridge back: a pack states the character it needs.
+#
+# A role with hands but no character is a puppet. Each pack therefore declares
+# the traits its work requires, and `character_for_pack` composes a person from
+# them - the same catalogue the character module uses, so the two layers cannot
+# drift apart.
+#
+# On the observer: the human foundation is a childlike learner that watches and
+# grows CONTINUOUSLY in the background. It is never shown. Nothing in this
+# module surfaces it: the front stage stays one coherent character, while the
+# learning lives where it already lived - the soul's calibration and the memory
+# capture paths. Character and observer never speak at once.
+# ---------------------------------------------------------------------------
+
+#: The traits each role needs to BE what its skills let it DO.
+PACK_TRAITS: dict[str, tuple[str, ...]] = {
+    "assistant": ("assistant", "warm", "fast"),
+    "engineer": ("engineer", "accurate", "verify", "systems", "direct"),
+    "auditor": ("auditor", "skeptical", "verify", "direct", "honest_failure"),
+    "researcher": ("researcher", "curious", "skeptical", "accurate"),
+    "executive": ("executive", "strategist", "fast", "cost_aware", "mature"),
+    "operator": ("operator", "calm", "direct", "verify"),
+    "teacher": ("teacher", "gentle", "warm", "mentor"),
+}
+
+
+def pack_traits(pack_id: str) -> tuple[str, ...]:
+    """The character traits a role declares, or the assistant's when unknown."""
+    return PACK_TRAITS.get(str(pack_id or "").strip(), PACK_TRAITS["assistant"])
+
+
+def character_for_pack(pack_id: str, base: tuple[str, ...] = ()) -> Any:
+    """Compose the character a role needs, keeping any base ingredients.
+
+    ``base`` carries what the situation already decided (audience, urgency);
+    the pack's own traits are appended AFTER them, so the role's competence
+    stays the specialty while the base keeps its tone - the same "last
+    ingredient decides the specialty" rule the character module follows.
+    """
+    from jarvis.persona.character import compose  # noqa: PLC0415 - keeps this file import-light
+
+    ingredients = [str(i) for i in base if str(i).strip()]
+    for trait_id in pack_traits(pack_id):
+        if trait_id not in ingredients:
+            ingredients.append(trait_id)
+    return compose(str(pack_id or "composed"), ingredients)
+
+
+def missing_traits(pack_id: str, persona: Any) -> list[str]:
+    """Traits the role needs that the character lacks. Empty means "complete"."""
+    have = {str(i) for i in getattr(persona, "ingredients", ()) or ()}
+    return [trait for trait in pack_traits(pack_id) if trait not in have]
+
+
+__all__ += ["PACK_TRAITS", "character_for_pack", "missing_traits", "pack_traits"]

@@ -82,3 +82,45 @@ def test_an_unknown_pack_resolves_with_a_reason() -> None:
     result = resolve_pack("ghost", _Registry({}))
     assert result["resolved"] is False
     assert "unknown pack" in result["reason"]
+
+
+# ------------------------------------------------- the bridge back: role -> self
+
+
+def test_the_bridge_is_two_way() -> None:
+    from jarvis.skills.packs import character_for_pack, missing_traits  # noqa: PLC0415
+
+    persona = character_for_pack("auditor", base=("mature", "calm"))
+
+    assert persona.name == "auditor"
+    assert "mature" in persona.ingredients and "calm" in persona.ingredients
+    assert missing_traits("auditor", persona) == []  # the role has its character
+    assert persona.describe().strip()
+
+
+def test_a_mismatched_character_reports_what_the_role_needs() -> None:
+    from jarvis.skills.packs import character_for_pack, missing_traits, pack_traits  # noqa: PLC0415
+
+    teacher = character_for_pack("teacher")
+    missing = missing_traits("engineer", teacher)
+
+    assert missing == [t for t in pack_traits("engineer") if t not in teacher.ingredients]
+    assert "engineer" in missing
+
+
+def test_an_unknown_role_falls_back_to_the_everyday_character() -> None:
+    from jarvis.skills.packs import character_for_pack, pack_traits  # noqa: PLC0415
+
+    assert pack_traits("nope") == pack_traits("assistant")
+    assert character_for_pack("nope").name == "nope"
+    assert "assistant" in character_for_pack("nope").ingredients
+
+
+def test_the_pack_traits_are_real_ingredients_of_the_catalogue() -> None:
+    from jarvis.persona.character import TRAITS  # noqa: PLC0415
+    from jarvis.skills.packs import PACK_TRAITS  # noqa: PLC0415
+
+    for pack_id, traits in PACK_TRAITS.items():
+        assert traits, f"{pack_id} declares no character"
+        unknown = [t for t in traits if t not in TRAITS]
+        assert not unknown, f"{pack_id} needs traits that do not exist: {unknown}"
