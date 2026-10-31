@@ -7,7 +7,7 @@ evolve" effort. One section per cycle; older sections are never rewritten.
 
 | Fact | Value | Evidence |
 |---|---|---|
-| Product install | `C:\Users\Arda\.personal-jarvis` | `.jarvis-managed-install` (`profile: full`, `desktop: true`) |
+| Product install | `%USERPROFILE%\.personal-jarvis` | `.jarvis-managed-install` (`profile: full`, `desktop: true`) |
 | Desktop entry | `.venv\Scripts\PersonalJarvis.exe -m jarvis.ui.web.launcher` | `Desktop\Personal Jarvis.lnk` |
 | Runtime data | `<repo>\data\`, `%LOCALAPPDATA%\Jarvis\` | live SQLite + JSON state |
 | Python | 3.12.9 (project `.venv`) | `.venv\Scripts\python.exe -V` |
