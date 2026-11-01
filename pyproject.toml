@@ -267,6 +267,11 @@ Discord = "https://discord.gg/x7USduHxbc"
 [project.optional-dependencies]
 # Optional message transports; the base application remains headless-friendly.
 trigger-streams = ["aiokafka>=0.12,<1", "aio-pika>=9,<10", "paho-mqtt>=2.1,<3", "redis>=5,<9"]
+# Explicit opt-in: Turkish Pocket TTS pulls heavy Torch packages and therefore
+# must NOT enter the base, full, desktop or local-voice install profiles.
+# Install only after user intent and size/compatibility checks.
+turkish-voice = ["pocket-tts-turkish==0.1.0"]
+
 dev = [
     # Pull the runtime extras the test suite exercises. The local-voice + desktop
     # packages were base dependencies until the cloud-first split; tests still
