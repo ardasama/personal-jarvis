@@ -19,6 +19,10 @@ import argparse
 import asyncio
 import contextlib
 import os
+# AIHub P04: avoid 16-thread OpenBLAS x2 in the 16 GiB desktop.
+# A documented external OPENBLAS_NUM_THREADS still takes precedence.
+# No model precision, weights, voice provider, or inference backend changes.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "12")
 import re
 import signal
 import sys

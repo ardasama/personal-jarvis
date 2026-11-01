@@ -3534,9 +3534,12 @@ class BrainManager:
         return ready
 
     def _lead_vision_chain(
-        self, chain: list[tuple[str, str | None]]
+        self,
+        chain: list[tuple[str, str | None]],
+        *,
+        include_screen_model: bool = True,
     ) -> list[tuple[str, str | None]]:
-        """On an image turn, put the router vision FAST model first.
+        """On an image turn, prefer an opted-in look model, then router FAST.
 
         Live 2026-08-31 17:06: a realtime screenshot delegated through
         ``prefer_tool_model`` led with Vertex ``gemini-3.7-flash`` (the Tool
@@ -3570,7 +3573,29 @@ class BrainManager:
             else:
                 rest.append((provider, model))
 
-        # Router first (from config), then the rest of the chain. The chat
+        # Only a user-configured pair may prepend a dedicated image model.
+        # Do not override a turn-scoped model/credential or a failed capability
+        # check. A blind candidate must not hide the healthy normal chain.
+        screen = getattr(self._config, "screen_context", None)
+        look_provider = str(getattr(screen, "vision_provider", "") or "").strip()
+        look_model = str(getattr(screen, "vision_model", "") or "").strip()
+        if (
+            include_screen_model
+            and look_provider
+            and look_model
+            and look_provider not in self._dead_providers
+        ):
+            if self._provider_advertises_vision(look_provider, look_model):
+                vision.append((look_provider, look_model))
+                seen.add(look_provider)
+            else:
+                log.warning(
+                    "Configured screen look model %s(%s) is not vision-capable; "
+                    "keeping the normal image chain.",
+                    look_provider, look_model,
+                )
+
+        # Router next (from config), then the rest of the chain. The chat
         # primary is not a ranking signal — it may be a billed-out slot.
         if isinstance(router_provider, str) and router_provider:
             _consider(router_provider, None)
@@ -11994,7 +12019,14 @@ class BrainManager:
 
         vision_capable_seen = False
         if images:
-            chain = self._lead_vision_chain(chain)
+            from jarvis.core.model_selection import operation_model
+
+            chain = self._lead_vision_chain(
+                chain,
+                include_screen_model=(
+                    turn_override is None and operation_model.get() is None
+                ),
+            )
         screen_turn_t0 = time.perf_counter() if images else None
 
         for idx, (prov_name, model) in enumerate(chain):

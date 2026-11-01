@@ -31,7 +31,8 @@ def _mgr(*, active: str = "grok") -> BrainManager:
                 provider="grok",
                 model="grok-4.20-0309-non-reasoning",
             )
-        )
+        ),
+        screen_context=SimpleNamespace(vision_provider="", vision_model=""),
     )
     brains = {
         "grok": _Vision(),
@@ -100,3 +101,65 @@ def test_blind_providers_stay_in_the_tail() -> None:
     led = m._lead_vision_chain([("codex", "gpt-5.5"), ("grok", "grok-4.6")])
     assert led[0][0] == "grok"
     assert led[-1][0] == "codex"
+
+
+def test_explicit_screen_model_precedes_cloud_router_only_for_image_turns() -> None:
+    m = _mgr()
+    m._config.screen_context.vision_provider = "ollama"
+    m._config.screen_context.vision_model = "qwen3.5:4b-8k"
+    checked: list[tuple[str, str | None]] = []
+
+    def brain(provider: str, model: str | None = None) -> object:
+        checked.append((provider, model))
+        return _Vision()
+
+    m._get_brain = brain  # type: ignore[method-assign]
+    chain = [("grok", "grok-4.6"), ("openrouter", "free-model")]
+    led = m._lead_vision_chain(chain)
+    assert led[0] == ("ollama", "qwen3.5:4b-8k")
+    assert led[1] == ("grok", "grok-4.20-0309-non-reasoning")
+    assert checked[0] == ("ollama", "qwen3.5:4b-8k")
+    assert led.count(("ollama", "qwen3.5:4b-8k")) == 1
+    # An explicitly selected turn has its own model/credential.
+    assert m._lead_vision_chain(chain, include_screen_model=False)[0][0] == "grok"
+
+
+def test_screen_model_does_not_activate_when_incomplete_or_unavailable() -> None:
+    m = _mgr()
+    normal = [("grok", "grok-4.6"), ("codex", "gpt-5.5")]
+    m._config.screen_context.vision_provider = "ollama"
+    assert m._lead_vision_chain(normal)[0][0] == "grok"
+    m._config.screen_context.vision_model = "text-only"
+    m._get_brain = (  # type: ignore[method-assign]
+        lambda provider, model=None: _Blind() if provider == "ollama" else _Vision()
+    )
+    assert m._lead_vision_chain(normal)[0][0] == "grok"
+    m._config.screen_context.vision_model = "qwen3.5:4b-8k"
+    m._dead_providers.add("ollama")
+    assert m._lead_vision_chain(normal)[0][0] == "grok"
+
+
+def test_screen_model_settings_are_opt_in_and_not_agent_self_mutable() -> None:
+    from jarvis.core.config import JarvisConfig, ScreenContextConfig
+    from jarvis.core.self_mod.forbidden import is_forbidden
+
+    default = JarvisConfig().screen_context
+    assert default.vision_provider == ""
+    assert default.vision_model == ""
+    custom = ScreenContextConfig(
+        vision_provider="ollama", vision_model="qwen3.5:4b-8k"
+    )
+    assert custom.vision_provider == "ollama"
+    assert custom.vision_model == "qwen3.5:4b-8k"
+    assert is_forbidden("screen_context.vision_provider")
+    assert is_forbidden("screen_context.vision_model")
+
+
+def test_screen_model_deduplicates_a_provider_already_in_chain() -> None:
+    m = _mgr()
+    m._config.screen_context.vision_provider = "ollama"
+    m._config.screen_context.vision_model = "qwen3.5:4b-8k"
+    m._get_brain = lambda provider, model=None: _Vision()  # type: ignore[method-assign]
+    led = m._lead_vision_chain([("ollama", "deepseek-r1:8b"), ("grok", "grok-4.6")])
+    assert led[0] == ("ollama", "qwen3.5:4b-8k")
+    assert len([row for row in led if row[0] == "ollama"]) == 1

@@ -267,6 +267,11 @@ Discord = "https://discord.gg/x7USduHxbc"
 [project.optional-dependencies]
 # Optional message transports; the base application remains headless-friendly.
 trigger-streams = ["aiokafka>=0.12,<1", "aio-pika>=9,<10", "paho-mqtt>=2.1,<3", "redis>=5,<9"]
+# Explicit opt-in: Turkish Pocket TTS pulls heavy Torch packages and therefore
+# must NOT enter the base, full, desktop or local-voice install profiles.
+# Install only after user intent and size/compatibility checks.
+turkish-voice = ["pocket-tts-turkish==0.1.0"]
+
 dev = [
     # Pull the runtime extras the test suite exercises. The local-voice + desktop
     # packages were base dependencies until the cloud-first split; tests still
@@ -413,13 +418,25 @@ desktop-macos = [
     # app process while source/dependencies remain in the managed checkout —
     # py2app is no longer a dependency, and the stub also links against
     # non-framework (uv standalone) interpreters that py2app never supported.
-    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
-    "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
-    "pyobjc-framework-Accessibility>=10; sys_platform == 'darwin'",
-    "pyobjc-framework-AVFoundation>=10; sys_platform == 'darwin'",
+    # PyObjC 13 (Xcode 27 SDK) fails CoreMedia Swift dylib loading on older macOS Intel.
+    # Keep desktop-macos on the proven 12.x series until runners and SDKs agree.
+    "pyobjc-framework-Quartz>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-Accessibility>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-AVFoundation>=10,<13; sys_platform == 'darwin'",
     # Native per-window Computer-Use capture (SCScreenshotManager by
     # CGWindowID); runtime-probed — an absent framework degrades to rect grabs.
-    "pyobjc-framework-ScreenCaptureKit>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-ScreenCaptureKit>=10,<13; sys_platform == 'darwin'",
+    # Indirect PyObjC dependencies from pywebview and AVFoundation must use
+    # the SAME major version, otherwise CoreMedia can load incompatible Swift libraries.
+    "pyobjc-core>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreAudio>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreMedia>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreText>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-WebKit>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-security>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-UniformTypeIdentifiers>=10,<13; sys_platform == 'darwin'",
 ]
 # Local (offline) voice engines. Optional per the cloud-first doctrine
 # (CLAUDE.md §3): this extra ships with the advertised [full] profile (design

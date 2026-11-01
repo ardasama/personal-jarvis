@@ -251,16 +251,19 @@ async def login(account_id: str) -> dict[str, Any]:
             status_code=500,
             detail=f"The sign-in could not be started: {type(exc).__name__}: {exc}",
         ) from exc
-    return {
-        "ok": True,
-        "message": (
-            f"Sign-in started for {account.label} — finish it in the window that "
-            "opened. If the browser signs you straight in without ever showing a "
-            "code, it reused the account you are already signed in with at "
-            "claude.com: sign out there (or use a private window) and start this "
-            "sign-in again, or both entries end up on the same subscription."
-        ),
-    }
+    message = f"Sign-in started for {account.label} - finish it in the window that opened."
+    if account.platform == "claude":
+        message += (
+            " If the browser signs you in without showing a code, it may reuse "
+            "your existing claude.com session. Switch accounts or sign out there "
+            "before retrying to avoid linking two entries to one subscription."
+        )
+    elif account.platform == "codex":
+        message += (
+            " Complete ChatGPT sign-in in the browser. To connect a different "
+            "ChatGPT account, select it in the browser before granting consent."
+        )
+    return {"ok": True, "message": message}
 
 
 class LoginFlowCodeRequest(BaseModel):

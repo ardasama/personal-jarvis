@@ -2642,8 +2642,8 @@ class ScreenContextConfig(BaseModel):
     here that enables continuous or silent monitoring, because no such code path
     exists — see ``docs/screen-context.md``.
 
-    Every key below is read by ``ScreenContextService`` (AP-31: no config that
-    nothing honours).
+    Keys are read by ``ScreenContextService`` and the image-turn path in
+    ``BrainManager`` (AP-31: no unused config).
     """
 
     model_config = {"extra": "allow"}
@@ -2651,6 +2651,11 @@ class ScreenContextConfig(BaseModel):
     #: Master switch. When off, an explicit "look at this" is answered with an
     #: honest "screen context is switched off" rather than silently ignored.
     enabled: bool = True
+
+    #: Optional image-turn-only model, without changing the conversation model.
+    #: Both values must be configured; the normal capture/privacy gates remain.
+    vision_provider: str = ""
+    vision_model: str = ""
 
     #: App names or window-title fragments that are NEVER captured — not
     #: captured and redacted, but not captured at all. Case-insensitive

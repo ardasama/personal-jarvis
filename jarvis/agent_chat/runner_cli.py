@@ -1282,10 +1282,19 @@ def plan_opencode(
     elif mode == "plan":
         # OpenCode's own plan agent: read-only by its definition.
         argv += ["--agent", "plan"]
+    if effort:
+        # OpenCode V2 accepts the variant within --model (provider/model#variant),
+        # not as a separate --variant flag. Preserve an explicit model selection
+        # and refuse conflicting persisted choices rather than guessing.
+        if not model:
+            raise ValueError("OpenCode model variant requires an explicit model")
+        _, separator, selected_variant = model.partition("#")
+        if separator and selected_variant != effort:
+            raise ValueError("Conflicting OpenCode model variants")
+        if not separator:
+            model = f"{model}#{effort}"
     if model:
         argv += ["--model", model]
-    if effort:
-        argv += ["--variant", effort]
     if resume:
         argv += ["--session", resume]
     argv += ["--", _argv_prompt(argv, prompt)]
