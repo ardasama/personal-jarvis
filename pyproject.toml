@@ -427,6 +427,16 @@ desktop-macos = [
     # Native per-window Computer-Use capture (SCScreenshotManager by
     # CGWindowID); runtime-probed — an absent framework degrades to rect grabs.
     "pyobjc-framework-ScreenCaptureKit>=10,<13; sys_platform == 'darwin'",
+    # Indirect PyObjC dependencies from pywebview and AVFoundation must use
+    # the SAME major version, otherwise CoreMedia can load incompatible Swift libraries.
+    "pyobjc-core>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreAudio>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreMedia>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreText>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-WebKit>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-security>=10,<13; sys_platform == 'darwin'",
+    "pyobjc-framework-UniformTypeIdentifiers>=10,<13; sys_platform == 'darwin'",
 ]
 # Local (offline) voice engines. Optional per the cloud-first doctrine
 # (CLAUDE.md §3): this extra ships with the advertised [full] profile (design
