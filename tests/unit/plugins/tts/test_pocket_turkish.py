@@ -52,12 +52,12 @@ def test_valid_turkish_stream_yields_signed_pcm_and_correct_voice() -> None:
     engine = PocketTurkishTTS(voice="male_2", emotion="mutlu")
     model = FakeModel()
     bind_fake_model(engine, model)
-    chunks = asyncio.run(collect(engine, "Merhaba dünya", language_code="tr-TR"))
+    chunks = asyncio.run(collect(engine, "Merhaba dünya", language_code="tr-TR"))  # i18n-allow: Turkish speech test input
     assert len(chunks) == 1
     assert chunks[0].sample_rate == 24000
     assert chunks[0].channels == 1
     assert np.frombuffer(chunks[0].pcm, dtype=np.int16).tolist() == [16383, -16383]
-    assert model.calls == [("Merhaba dünya", "male_2", "mutlu")]
+    assert model.calls == [("Merhaba dünya", "male_2", "mutlu")]  # i18n-allow: Turkish speech expected values
     assert engine.last_voice_provider == "pocket-turkish"
 
 

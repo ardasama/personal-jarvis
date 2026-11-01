@@ -76,11 +76,11 @@ _NEGATED_SCREEN_LOOK_RE: re.Pattern[str] = re.compile(
     r"|click|move|scroll|touch|open|close|press|drag|type\s+on)\b"
     r"[^.!?;,:]{0,80}?\b(?:screen|screenshot|monitor|window|desktop|image)s?\b"
     # German speech-input matching data (i18n-allow).
-    r"|\b(?:schau|sieh|guck)\s+nicht\s+[^.!?;,:]{0,65}?"
+    r"|\b(?:schau|sieh|guck)\s+nicht\s+[^.!?;,:]{0,65}?"  # i18n-allow: deliberate German negative screen intent
     r"\b(?:bildschirm|screen|monitor|fenster)\b"
-    r"|\b(?:klicke|druecke|tippe|scrolle|bewege|oeffne|schliesse)\s+nicht\b"
+    r"|\b(?:klicke|druecke|tippe|scrolle|bewege|oeffne|schliesse)\s+nicht\b"  # i18n-allow: deliberate German click refusal
     r"[^.!?;,:]{0,75}?\b(?:bildschirm|screen|monitor|fenster)\b"
-    r"|\b(?:mach|erstelle|nimm)\s+kein(?:e|en)?\s+"
+    r"|\b(?:mach|erstelle|nimm)\s+kein(?:e|en)?\s+"  # i18n-allow: deliberate German creation refusal
     r"(?:screenshot|bildschirmfoto)\b"
     # Spanish speech-input matching data (i18n-allow).
     r"|\bno\s+(?:mires|veas|captures|hagas|analices|revises|uses)\b"

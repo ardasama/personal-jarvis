@@ -54,7 +54,7 @@ class PocketTurkishTTS:
 
     def __init__(self, *, voice: str = "male_1", emotion: str = "sakin") -> None:
         self._voice = voice if voice in _VOICES else "male_1"
-        self._emotion = emotion if emotion in {"sakin", "mutlu", "şaşkın", "üzgün", "kızgın"} else "sakin"
+        self._emotion = emotion if emotion in {"sakin", "mutlu", "şaşkın", "üzgün", "kızgın"} else "sakin"  # i18n-allow: explicit Turkish emotion voice labels
         self._model: Any | None = None
         self._load_lock = asyncio.Lock()
         self._synthesis_lock = asyncio.Lock()
