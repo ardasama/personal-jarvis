@@ -314,6 +314,52 @@ def test_product_questions_are_not_capture_consent(utterance: str) -> None:
     assert classify(utterance).intent is VisualIntent.NONE
 
 
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Do not access my screen. Produce a text report.",
+        "Never take a screenshot.",
+        "Don't inspect the current window.",
+        "Don't click anything on my screen.",
+        "Don't move the cursor on my screen.",
+        "Schau nicht auf meinen Bildschirm.",  # i18n-allow: DE input
+        "Klicke nicht auf meinen Bildschirm.",  # i18n-allow: DE input
+        "Mach keinen Screenshot.",  # i18n-allow: DE input
+        "No mires mi pantalla.",  # i18n-allow: ES input
+        "No toques mi pantalla.",  # i18n-allow: ES input
+        "No hagas una captura de pantalla.",  # i18n-allow: ES input
+    ],
+)
+def test_explicit_screen_denial_does_not_trigger_capture(utterance: str) -> None:
+    assert classify(utterance).intent is VisualIntent.NONE
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Do not capture my screen; instead look at this.",
+        "Don't click my screen; instead look at this.",
+        "Schau nicht auf meinen Bildschirm. Schau dir das an.",  # i18n-allow
+        "Klicke nicht auf meinen Bildschirm. Schau dir das an.",  # i18n-allow
+        "No mires mi pantalla; mira esta ventana.",  # i18n-allow
+        "No toques mi pantalla; mira esta ventana.",  # i18n-allow
+    ],
+)
+def test_screen_denial_does_not_hide_later_positive_request(utterance: str) -> None:
+    assert classify(utterance).wants_capture
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Don't forget to look at my screen.",
+        "No olvides mirar mi pantalla.",  # i18n-allow: ES input
+    ],
+)
+def test_do_not_forget_is_still_a_positive_screen_request(utterance: str) -> None:
+    assert classify(utterance).wants_capture
+
+
 def test_idiom_masking_does_not_veto_a_real_request() -> None:
     """An idiom and a real request in one sentence must still capture.
 
