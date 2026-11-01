@@ -71,6 +71,7 @@ def _json_ok(text: str) -> bool:
     try:
         data = json.loads(text[start : end + 1])
     except (ValueError, TypeError):
+        # Malformed probe output is a negative verdict.
         return False
     if not isinstance(data, dict):
         return False
@@ -142,6 +143,7 @@ def _read(path: Path) -> dict[str, Any]:
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
+        # No evaluation store means no model results yet.
         return {"version": _STORE_VERSION, "models": {}}
     except OSError:
         log.debug("eval_suite: unreadable at %s", path, exc_info=True)
@@ -207,6 +209,7 @@ def write_report(
             try:
                 os.unlink(tmp)
             except OSError:
+                # Keep the original report-write error on cleanup.
                 pass
             raise
     except Exception:  # noqa: BLE001 — a report must never crash the caller

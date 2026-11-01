@@ -52,7 +52,7 @@ _SHORTLIST_2026_08_24 = (
     "gemma4:26b-a4b-it-qat",
     "qwen3.8:27b",
     "nemotron-3.5-lightning",
-    "qwen3-vl:2b",
+    "qwen3-vl:2b-instruct-q4_K_M",
     "ornith:9b",
     "qwen3.6:27b",
     "muse-glimmer:30b",

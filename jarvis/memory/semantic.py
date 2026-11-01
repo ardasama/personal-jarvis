@@ -86,6 +86,7 @@ def _vector_of(payload: dict[str, Any] | None) -> list[float] | None:
     try:
         vector = [float(value) for value in raw]
     except (TypeError, ValueError):
+        # Reject malformed vector as unavailable.
         return None
     return vector if all(math.isfinite(value) for value in vector) else None
 

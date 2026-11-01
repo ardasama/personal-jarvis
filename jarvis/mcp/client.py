@@ -426,6 +426,7 @@ class MCPClient:
             handle.seek(0)
             data = handle.read()
         except (OSError, ValueError):
+            # Closed diagnostic stream has no readable tail.
             return ""
         if not data:
             return ""
@@ -442,6 +443,7 @@ class MCPClient:
             try:
                 handle.close()
             except OSError:
+                # Closing diagnostics is best-effort on teardown.
                 pass
 
     # ---- Interaction ----------------------------------------------------

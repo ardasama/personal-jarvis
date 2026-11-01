@@ -3138,6 +3138,7 @@ class BrainManager:
             try:
                 router_prov_cfg.thinking_budget = 0
             except (AttributeError, TypeError):
+                # Optional provider has no writable thinking budget.
                 pass
 
         configured_fallbacks: list[tuple[str, str | None]] = []
