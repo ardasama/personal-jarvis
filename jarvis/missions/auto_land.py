@@ -55,6 +55,7 @@ async def run_git(argv: list[str], cwd: Path) -> tuple[int, str]:
             creationflags=NO_WINDOW_CREATIONFLAGS,
         )
     except OSError as exc:
+        # Return git spawn failure to caller with status 127.
         return 127, f"git could not be started: {exc}"
     out, _ = await proc.communicate()
     return proc.returncode or 0, (out or b"").decode("utf-8", "replace")

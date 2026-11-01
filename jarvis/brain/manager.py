@@ -1,4 +1,4 @@
-﻿"""BrainManager: Intent-Router + Smart-Fallback + Pipeline-Adapter.
+"""BrainManager: Intent-Router + Smart-Fallback + Pipeline-Adapter.
 
 Architecture:
 
@@ -3138,6 +3138,7 @@ class BrainManager:
             try:
                 router_prov_cfg.thinking_budget = 0
             except (AttributeError, TypeError):
+                # Optional provider has no writable thinking budget.
                 pass
 
         configured_fallbacks: list[tuple[str, str | None]] = []
@@ -3767,6 +3768,23 @@ class BrainManager:
             system_prompt = f"{system_prompt}\n\n{cards}"
         if delegated_voice:
             system_prompt = f"{system_prompt}\n\n{_DELEGATE_VOICE_DIRECTIVE}"
+        # The composed character for THIS moment (jarvis/persona). Identity stays
+        # with SOUL; this is only how the turn behaves, and the non-negotiable
+        # limits ride LAST so nothing above them can loosen a rule. A delegated
+        # voice turn is the product's own marker for 'this will be spoken', so the
+        # spoken turn gets the short form and a written turn the full one.
+        try:
+            from jarvis.persona.inject import block_for_turn
+
+            _character = block_for_turn(
+                text=str(getattr(self, "_turn_text", "") or ""),
+                channel="voice" if delegated_voice else "text",
+                language=str(getattr(self, "_reply_language", "") or ""),
+            )
+            if _character:
+                system_prompt = f"{system_prompt}\n\n{_character}"
+        except Exception:  # noqa: BLE001 - a character glitch must not kill the turn
+            log.debug("persona: character block skipped", exc_info=True)
         kwargs: dict[str, Any] = {}
         if max_turns is not None:
             kwargs["max_turns"] = max_turns
@@ -11853,6 +11871,10 @@ class BrainManager:
         # the whole chain fails. Pattern: (provider, model, kind, detail).
         # kind ∈ {"rate_limit", "missing_key", "skipped_cooldown", "init_fail",
         #         "call_fail"}
+        # The turn's own words, for the per-turn CHARACTER (jarvis/persona): the
+        # dispatcher reads it to pick the ingredients, so a code turn and a plain
+        # question never get the same person. Cleared at the turn's end.
+        self._turn_text = user_text
         provider_errors: list[tuple[str, str, str, str]] = []
 
         # B5 Agent C: wiki context injection — run once before the provider
@@ -12596,6 +12618,8 @@ class BrainManager:
         # B5 Agent C: reset per-turn wiki suffix regardless of outcome so
         # stale context cannot leak into the next voice turn.
         self._wiki_context_suffix = ""
+        # ...and the same for the turn's words (the next turn sets its own).
+        self._turn_text = ""
 
         if screen_context.has_image and not vision_capable_seen:
             from jarvis.screen_context.intent import (  # noqa: PLC0415

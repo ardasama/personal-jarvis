@@ -40,11 +40,12 @@ def test_vosk_models_root_honours_explicit_override(monkeypatch, tmp_path) -> No
     assert wake_constants._vosk_models_root() == tmp_path / "wake_models" / "vosk"
 
 
-def test_vosk_models_root_is_not_cwd_relative(monkeypatch) -> None:
+def test_vosk_models_root_is_not_cwd_relative(monkeypatch, tmp_path) -> None:
     """A regression to a bare "data" would make this CWD-dependent."""
     _clear_seams(monkeypatch)
     first = wake_constants._vosk_models_root()
-    monkeypatch.chdir(first.parent)
+    # A clean CI checkout need not contain data/wake_models on disk.
+    monkeypatch.chdir(tmp_path)
     assert wake_constants._vosk_models_root() == first
 
 

@@ -33,7 +33,7 @@
     "allow_sapi5_fallback": false
   },
   "brain": {
-    "primary": "openai",
+    "primary": "gemini",
     "fallback": "openrouter",
     "deep_brain": "claude-cli",
     "routing_provider": "grok",
@@ -56,7 +56,7 @@
     "deep_model": "claude-opus-4-8"
   },
   "brain.worker": {
-    "provider": "openai-codex",
+    "provider": "openrouter",
     "model": "",
     "fallback_provider": "gemini",
     "fallback_model": "gemini-3.1-pro-preview",
@@ -67,7 +67,7 @@
     "provider": "groq-api",
     "model": "whisper-large-v3",
     "bias_prompt": "Jarvis, OpenClaw, Codex, Gemini, Grok, Claude, Anthropic, OpenAI, OpenRouter, Whisper, Subagent, Sub-Agent, Mission-Manager, Critic-Loop, Critic, Worker, Router-Brain, Router, Kontrollierer, Voice-Pipeline, Wake-Word, Silero, VAD, TTS, STT, Telemetry, Transkript, Token, Provider, Plugin, Sprechblase, Orb, Mascot, Quip, Browser, Terminal, Repository, Branch, Commit, Push, Pull-Request, Issue, Merge, Refactor, Deployment, Screenshot, Debuggen, Workflow, Microservice, Container, Docker, Kubernetes, FastAPI, React, TypeScript, Python, JSON, Markdown, Logfile, Konfiguration, Endpoint, Webhook, API-Key, Service-Account, Cloud, Google Cloud, Vertex AI, BigQuery, GitHub, Twilio, ElevenLabs, OAuth, Credential Manager, Frontend, Backend, Skript, Daemon, Hangup, Auflegen, Denkpause, submitted, distanziert, erkennt",
-    "language": "auto",
+    "language": "tr",
     "models": {
       "openrouter-stt": "openai/gpt-4o-transcribe"
     }
@@ -113,7 +113,7 @@
     "provider": "vertex"
   },
   "brain.computer_use": {
-    "provider": "openai"
+    "provider": "gemini"
   },
   "brain.providers.grok-realtime": {
     "voice": "lux"

@@ -43,10 +43,12 @@ def mission_patch_text(outputs_root: Path, mission_id: str) -> str:
     try:
         mission_dir.relative_to(root)
     except ValueError:
+        # Reject paths outside the allowed output root.
         return ""
     try:
         task_dirs = sorted(p for p in (mission_dir / "tasks").iterdir() if p.is_dir())
     except OSError:
+        # Unreadable task directories yield no summary.
         return ""
     parts: list[str] = []
     for task_dir in task_dirs:
@@ -149,6 +151,7 @@ def _final_patch(artifacts_dir: Path) -> Path | None:
             if best is None or n > best[0]:
                 best = (n, candidate)
     except OSError:
+        # Unreadable artifact directories have no patch.
         return None
     return best[1] if best else None
 
