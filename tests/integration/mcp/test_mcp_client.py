@@ -127,7 +127,12 @@ async def test_adapter_execute_returns_toolresult_on_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_call_tool_before_start_raises() -> None:
+async def test_call_tool_before_start_revives_client() -> None:
+    """A registered tool can revive a stopped MCP session on demand."""
     client = _client("ok")
-    with pytest.raises(RuntimeError, match="not started"):
-        await client.call_tool("echo", {"msg": "hi"})
+    try:
+        result = await client.call_tool("echo", {"msg": "hi"})
+        assert result is not None
+        assert client.is_healthy is True
+    finally:
+        await client.stop()
