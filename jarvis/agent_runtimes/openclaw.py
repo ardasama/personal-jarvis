@@ -84,8 +84,8 @@ _DOCTOR_TIMEOUT_S: Final[float] = 120.0
 _EXIT_CONFIG: Final[int] = 78
 
 #: Node.js for Jarvis' private copy (the release OpenClaw's own user-space
-#: installer pins; inside the engine range below).
-_PRIVATE_NODE_VERSION: Final[str] = "24.21.0"
+#: installer pins; security-fixed Node 26 with safe SQLite).
+_PRIVATE_NODE_VERSION: Final[str] = "26.12.1"
 
 #: The embedding preset from OpenClaw's embedding guide.
 _EMBED_ENV: Final[dict[str, str]] = {
