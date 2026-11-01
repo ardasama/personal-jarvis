@@ -188,6 +188,7 @@ def transient_fail_streak(tokens: object) -> int:
     try:
         return max(0, int(extra.get(_TRANSIENT_FAIL_STREAK_KEY, 0) or 0))
     except (TypeError, ValueError):
+        # Invalid retry streak resets to permit refresh.
         return 0
 
 
@@ -219,6 +220,7 @@ def _transient_backoff_due(tokens: object) -> bool:
     try:
         last_dt = datetime.fromisoformat(last)
     except (TypeError, ValueError):
+        # Invalid timestamp permits refresh, not lockout.
         return True
     if last_dt.tzinfo is None:
         last_dt = last_dt.replace(tzinfo=UTC)

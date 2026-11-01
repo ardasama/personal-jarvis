@@ -277,7 +277,9 @@ class _PosixProcessGroup:
             return
         self._signal(groups, signal.SIGTERM)
         timer = threading.Timer(GRACE_S, self._signal, args=(groups, _SIGKILL))
-        timer.daemon = True
+        # Finish bounded SIGKILL escalation before Python tears down stderr.
+        # Daemon timers used to log during interpreter finalization and abort CI.
+        timer.daemon = False
         timer.start()
 
     def _signal(self, groups: tuple[int, ...], sig: int) -> None:

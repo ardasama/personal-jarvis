@@ -104,6 +104,7 @@ def _safe_target(root: Path, rel: str) -> Path | None:
     try:
         resolved = (root / Path(*parts)).resolve()
     except OSError:
+        # Reject a destination that cannot resolve safely.
         return None
     return resolved if resolved.is_relative_to(root) else None
 
@@ -168,6 +169,7 @@ def _new_backup_dir(root: Path) -> Path:
             candidate.mkdir(parents=True, exist_ok=False)
             return candidate
         except FileExistsError:
+            # Retry backup name collision without overwrite.
             continue
     raise OSError(f"could not create a unique backup directory under {root}")
 
@@ -215,6 +217,7 @@ def _backup_paths(paths: Sequence[str], *, repo_root: Path, backup_dir: Path) ->
             try:
                 os.unlink(name)
             except OSError:
+                # Preserve the original backup error on cleanup.
                 pass
             raise
         copies[rel] = name

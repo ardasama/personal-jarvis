@@ -48,6 +48,7 @@ def _read(path: Path) -> dict[str, Any]:
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
+        # No probe store means no measured verdict yet.
         return {"version": _STORE_VERSION, "entries": {}}
     except OSError:
         log.debug("tool_probe_store: unreadable at %s", path, exc_info=True)
@@ -153,6 +154,7 @@ def write_verdict(
             try:
                 os.unlink(tmp)
             except OSError:
+                # Keep the original atomic-write error on cleanup.
                 pass
             raise
     except Exception:  # noqa: BLE001 — a probe result must never crash a caller
