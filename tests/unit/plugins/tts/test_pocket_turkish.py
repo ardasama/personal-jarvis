@@ -8,6 +8,32 @@ import pytest
 
 from jarvis.plugins.tts.pocket_turkish import PocketTurkishTTS
 
+def test_explicit_offline_provider_uses_factory_without_cloud_credentials() -> None:
+    """An explicit local provider must never fall through to cloud Gemini."""
+    from types import SimpleNamespace
+    from jarvis.plugins.tts import (
+        _build_provider,
+        _canonical_tts_name,
+        _resolve_keyed_tts_provider,
+    )
+
+    cfg = SimpleNamespace(
+        provider="pocket_turkish",
+        voice_de="Charon",  # Foreign cloud voice must not leak into local synthesis.
+        voice_tr="female_2",
+        model_extra={"pocket_turkish": {"emotion": "mutlu"}},
+    )
+    name, resolved = _resolve_keyed_tts_provider(cfg.provider, cfg)
+    assert _canonical_tts_name(cfg.provider) == "pocket-turkish"
+    assert name == "pocket-turkish"
+    engine = _build_provider(resolved, name)
+    assert isinstance(engine, PocketTurkishTTS)
+    assert engine.runs_on_device is True
+    assert engine._voice == "female_2"
+    assert engine._emotion == "mutlu"
+    assert engine._model is None  # Never download or initialize model on boot.
+
+
 
 class FakeModel:
     sample_rate = 24000
