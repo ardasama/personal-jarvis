@@ -205,7 +205,7 @@ _TAG_TO_CODE: dict[str, str] = {
     "en": "en", "eng": "en", "english": "en", "englisch": "en",
     "es": "es", "spa": "es", "spanish": "es", "spanisch": "es",
     "espanol": "es", "español": "es", "castellano": "es",
-    "tr": "tr", "tur": "tr", "turkish": "tr", "türkçe": "tr", "turkce": "tr",
+    "tr": "tr", "tur": "tr", "turkish": "tr", "türkçe": "tr", "turkce": "tr",  # i18n-allow: Turkish language tags
 }
 
 
