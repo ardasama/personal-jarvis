@@ -157,6 +157,18 @@ class OutputLanguageValidation:
 _DE_SCRIPT_RE = re.compile(r"[äöüÄÖÜß]")  # i18n-allow: German-script regex
 _ES_SCRIPT_RE = re.compile(r"[áíóúñÁÍÓÚÑ¿¡]")
 
+# A Turkish reply cannot be rejected solely by de/en/es scoring: Turkish
+# words such as "bin" and letters such as "ü" overlap German heuristics.
+# Conservatively abstain when there is direct Turkish script evidence or
+# multiple common Turkish function words; this protects text and audio
+# delivery without claiming to be a complete Turkish language detector.
+_TR_DISTINCTIVE_RE = re.compile(r"[ıİşŞğĞ]")
+_TR_GUARD_TOKENS = frozenset({
+    "bir", "bu", "bugün", "burada", "için", "ile", "olarak", "çok",
+    "kişi", "insanlar", "toplandı", "güzel", "var", "yok", "bunu",
+    "şimdi", "lütfen", "evet", "hayır", "değil", "sonra", "merhaba",
+})  # i18n-allow: Turkish conservative output-language vocabulary
+
 # Function-word sets, kept mutually disjoint. Words common to more than one of
 # the three languages are excluded on purpose (see module docstring).
 _DE_TOKENS: frozenset[str] = frozenset({
@@ -313,6 +325,13 @@ def validate_output_language(
         tokens = [token.lower() for token in _TOKEN_RE.findall(prose)]
         if _detect_gross_vietnamese_output(prose, tokens):
             detected = "vi"
+        elif target == "tr" and (
+            _TR_DISTINCTIVE_RE.search(prose)
+            or len(set(tokens) & _TR_GUARD_TOKENS) >= 2
+        ):
+            # The three-way strong classifier cannot reliably score Turkish.
+            # An ambiguous Turkish reply must never be suppressed as German.
+            detected = "unknown"
         else:
             detected = _detect_strong_supported_output(prose, tokens)
 
