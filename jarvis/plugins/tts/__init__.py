@@ -120,6 +120,8 @@ def _canonical_tts_name(name: str) -> str:
         return "gemini-flash-tts"
     if n in _OPENROUTER_TTS_ALIASES:
         return "openrouter"
+    if n in ("pocket-turkish", "pocket_turkish"):
+        return "pocket-turkish"
     return n
 
 
@@ -763,6 +765,19 @@ def _build_provider(tts_cfg: Any, provider: str) -> Any:
             voice_en=getattr(tts_cfg, "voice_en", None),
             language=tts_cfg.language_code or "auto",
             speed=tts_cfg.speed,
+        )
+
+    if provider == "pocket-turkish":
+        # Offline Turkish voice: no API credential, network request or eager
+        # model download. Weights are loaded on first synthesis only if cached.
+        from jarvis.plugins.tts.pocket_turkish import PocketTurkishTTS
+
+        extras = getattr(tts_cfg, "model_extra", None) or {}
+        pocket = extras.get("pocket_turkish") if isinstance(extras, dict) else None
+        pocket = pocket if isinstance(pocket, dict) else {}
+        return PocketTurkishTTS(
+            voice=str(pocket.get("voice") or getattr(tts_cfg, "voice_tr", None) or "male_1"),
+            emotion=str(pocket.get("emotion") or "sakin"),
         )
 
     if provider in ("piper-local", "piper"):
