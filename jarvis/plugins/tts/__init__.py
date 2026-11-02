@@ -203,6 +203,11 @@ def _resolve_keyed_tts_provider(primary_name: str, tts_cfg: Any) -> tuple[str, A
     """
     canonical = _canonical_tts_name(primary_name)
     if _tts_has_credential(canonical, tts_cfg):
+        # An explicit offline Turkish voice must keep its canonical family ID.
+        # Returning the configured underscore alias breaks factory parity and
+        # can make local TTS appear as a different provider at runtime.
+        if canonical == "pocket-turkish":
+            return canonical, tts_cfg
         return primary_name, tts_cfg
     for cand in _TTS_CROSS_FAMILY_ORDER:
         if cand == canonical:
