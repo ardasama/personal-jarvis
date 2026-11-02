@@ -21,7 +21,7 @@ def test_explicit_offline_provider_uses_factory_without_cloud_credentials() -> N
         provider="pocket_turkish",
         voice_de="Charon",  # Foreign cloud voice must not leak into local synthesis.
         voice_tr="female_2",
-        model_extra={"pocket_turkish": {"emotion": "mutlu"}},
+        model_extra={"pocket_turkish": {"emotion": "mutlu"}},  # i18n-allow: Turkish emotion test
     )
     name, resolved = _resolve_keyed_tts_provider(cfg.provider, cfg)
     assert _canonical_tts_name(cfg.provider) == "pocket-turkish"
