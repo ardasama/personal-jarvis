@@ -80,6 +80,6 @@
     "vitest": "^4.1.11"
   },
   "overrides": {
-    "dompurify": "3.4.16"
+    "dompurify": "3.4.17"
   }
 }
