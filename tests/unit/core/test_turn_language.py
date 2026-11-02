@@ -393,6 +393,15 @@ def test_output_language_validator_blocks_high_confidence_mismatches(
         "Use `response.status_code == 500`.",
     ],
 )
+def test_output_language_validator_keeps_ambiguous_content_non_blocking(
+    text: str,
+) -> None:
+    result = validate_output_language(text, resolved_language="de")
+
+    assert result.status == "indeterminate"
+    assert result.should_block is False
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -417,15 +426,6 @@ def test_turkish_pinned_reply_still_blocks_clear_english_corruption() -> None:
     assert result.status == "mismatch"
     assert result.detected_language == "en"
     assert result.should_block is True
-
-
-def test_output_language_validator_keeps_ambiguous_content_non_blocking(
-    text: str,
-) -> None:
-    result = validate_output_language(text, resolved_language="de")
-
-    assert result.status == "indeterminate"
-    assert result.should_block is False
 
 
 def test_output_language_validator_does_not_reject_a_chinese_name() -> None:
