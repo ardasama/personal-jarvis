@@ -220,6 +220,30 @@ class MCPRegistry:
         ]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=False)
+        # AIHub P04: optional, safe hibernation for verified stateless MCP
+        # clients. All tools stay registered; the existing MCPClient revives
+        # on first call. No extra daemon/process. Disabled unless mcp.json
+        # explicitly selects idle_hibernate_seconds on allowlisted servers.
+        try:
+            import json as _p04_json
+            from pathlib import Path as _p04_Path
+            _p04_config = _p04_Path(__file__).resolve().parents[2] / "mcp.json"
+            _p04_settings = _p04_json.loads(_p04_config.read_text(encoding="utf-8-sig"))
+            if any(
+                isinstance(_p04_entry, dict)
+                and "idle_hibernate_seconds" in _p04_entry
+                for _p04_entry in _p04_settings.get("mcpServers", {}).values()
+            ):
+                import importlib.util as _p04_import
+                _p04_file = _p04_Path.home() / "AIHub" / "projects" / "AIHub-Evolution" / "P04-JarvisMCPIdleSupervisor.py"
+                _p04_spec = _p04_import.spec_from_file_location("aihub_mcp_idle_supervisor", _p04_file)
+                if _p04_spec is None or _p04_spec.loader is None:
+                    raise RuntimeError("P04_IDLE_SUPERVISOR_UNAVAILABLE")
+                _p04_mod = _p04_import.module_from_spec(_p04_spec)
+                _p04_spec.loader.exec_module(_p04_mod)
+                _p04_mod.install(self, config_path=_p04_config)
+        except Exception as _p04_error:
+            log.warning("AIHub P04 idle-MCP supervision disabled: %s", type(_p04_error).__name__)
 
     async def start_one(self, name: str) -> bool:
         """Start a single registered server; True when it is live afterwards.

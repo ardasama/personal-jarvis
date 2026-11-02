@@ -120,6 +120,8 @@ def _canonical_tts_name(name: str) -> str:
         return "gemini-flash-tts"
     if n in _OPENROUTER_TTS_ALIASES:
         return "openrouter"
+    if n in ("pocket-turkish", "pocket_turkish"):
+        return "pocket-turkish"
     return n
 
 
@@ -201,6 +203,11 @@ def _resolve_keyed_tts_provider(primary_name: str, tts_cfg: Any) -> tuple[str, A
     """
     canonical = _canonical_tts_name(primary_name)
     if _tts_has_credential(canonical, tts_cfg):
+        # An explicit offline Turkish voice must keep its canonical family ID.
+        # Returning the configured underscore alias breaks factory parity and
+        # can make local TTS appear as a different provider at runtime.
+        if canonical == "pocket-turkish":
+            return canonical, tts_cfg
         return primary_name, tts_cfg
     for cand in _TTS_CROSS_FAMILY_ORDER:
         if cand == canonical:
@@ -763,6 +770,19 @@ def _build_provider(tts_cfg: Any, provider: str) -> Any:
             voice_en=getattr(tts_cfg, "voice_en", None),
             language=tts_cfg.language_code or "auto",
             speed=tts_cfg.speed,
+        )
+
+    if provider == "pocket-turkish":
+        # Offline Turkish voice: no API credential, network request or eager
+        # model download. Weights are loaded on first synthesis only if cached.
+        from jarvis.plugins.tts.pocket_turkish import PocketTurkishTTS
+
+        extras = getattr(tts_cfg, "model_extra", None) or {}
+        pocket = extras.get("pocket_turkish") if isinstance(extras, dict) else None
+        pocket = pocket if isinstance(pocket, dict) else {}
+        return PocketTurkishTTS(
+            voice=str(pocket.get("voice") or getattr(tts_cfg, "voice_tr", None) or "male_1"),
+            emotion=str(pocket.get("emotion") or "sakin"),  # i18n-allow: Turkish emotion default
         )
 
     if provider in ("piper-local", "piper"):

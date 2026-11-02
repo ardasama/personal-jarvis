@@ -9,6 +9,36 @@ platform through the same adapter seam.
 
 ---
 
+## Optional dedicated image-turn model (disabled by default)
+
+The existing BrainManager can prefer a separate model **only when an actual
+image is attached to a turn**. This does not change the ordinary chat model,
+enable permanent monitoring, or skip Screen Context's consent/redaction gate.
+Both settings default to empty; no provider is selected automatically.
+
+A supported, owner-controlled configuration update may set this example:
+
+```toml
+[screen_context]
+vision_provider = "ollama"
+vision_model = "qwen3.5:4b-8k"
+```
+
+Use the app's supported configuration writer rather than overwriting
+`jarvis.toml` directly. Verify that the selected local model is installed and
+advertises `vision`. An unavailable or text-only model does not become the
+primary model; the existing image chain remains the fallback. That fallback
+may involve other providers, so account/billing policy must be checked before
+a live screenshot test. A user-selected, turn-scoped model is never overridden.
+
+These two selection fields are forbidden to the self-modification interface:
+an agent must not silently change screenshot provider, model, or billing.
+The new route is covered by offline selection tests; live GUI/image-inference
+verification is a separate acceptance step. This feature does not sandbox
+external coding CLIs or guarantee that arbitrary commands cannot delete files.
+
+---
+
 ## 1. What this is
 
 > **Appshots** (2026-09-29) are the user-facing face of this engine: a

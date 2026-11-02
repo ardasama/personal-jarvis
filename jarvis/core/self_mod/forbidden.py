@@ -44,6 +44,10 @@ FORBIDDEN_PATTERNS: tuple[str, ...] = (
     # Settings route (x-jarvis-dangerous) or an explicit CLI call may flip it,
     # never voice, chat, self-mod or an agent (jarvis/missions/capacity.py).
     "missions.paid_api_fallback",
+    # A self-selected image provider may incur API charges or expose screenshots.
+    # Only the owner-controlled configuration path may enable this feature.
+    "screen_context.vision_provider",
+    "screen_context.vision_model",
     "*_api_key",
     "*_token",
     "*_secret",

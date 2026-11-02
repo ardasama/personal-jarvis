@@ -64,6 +64,35 @@ _SCREEN_CONTEXT_META_RE: re.Pattern[str] = re.compile(
 
 
 # --------------------------------------------------------------------------
+# Explicit screen-look denials are not consent to capture.
+# Mask only the denied phrase, so a separate positive request still works.
+# Like idiom masking, this avoids a blanket veto on mixed turns.
+# --------------------------------------------------------------------------
+_NEGATED_SCREEN_LOOK_RE: re.Pattern[str] = re.compile(
+    r"(?:"
+    r"\b(?:do\s+not|don't|never)\s+"
+    r"(?:try\s+to\s+|ask\s+to\s+)?"
+    r"(?:capture|access|inspect|view|analy[sz]e|look\s+at|check|use|take"
+    r"|click|move|scroll|touch|open|close|press|drag|type\s+on)\b"
+    r"[^.!?;,:]{0,80}?\b(?:screen|screenshot|monitor|window|desktop|image)s?\b"
+    # German speech-input matching data (i18n-allow).
+    r"|\b(?:schau|sieh|guck)\s+nicht\s+[^.!?;,:]{0,65}?"  # i18n-allow: deliberate German negative screen intent
+    r"\b(?:bildschirm|screen|monitor|fenster)\b"
+    r"|\b(?:klicke|druecke|tippe|scrolle|bewege|oeffne|schliesse)\s+nicht\b"  # i18n-allow: deliberate German click refusal
+    r"[^.!?;,:]{0,75}?\b(?:bildschirm|screen|monitor|fenster)\b"
+    r"|\b(?:mach|erstelle|nimm)\s+kein(?:e|en)?\s+"  # i18n-allow: deliberate German creation refusal
+    r"(?:screenshot|bildschirmfoto)\b"
+    # Spanish speech-input matching data (i18n-allow).
+    r"|\bno\s+(?:mires|veas|captures|hagas|analices|revises|uses)\b"
+    r"[^.!?;,:]{0,65}?\b(?:pantalla|captura|monitor|ventana)\b"
+    r"|\bno\s+(?:toques|pulses|hagas|muevas|desplaces|escribas)\b"
+    r"[^.!?;,:]{0,80}?\b(?:pantalla|captura|monitor|ventana)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+# --------------------------------------------------------------------------
 # Normalization
 # --------------------------------------------------------------------------
 
@@ -615,7 +644,7 @@ def classify(text: str, *, locale: str = "") -> IntentVerdict:
     ``NONE`` — non-conversational callers (REST, a scheduled task) reach the
     service without an utterance and must not be read as having asked to look.
     """
-    normalized = _normalize(text).strip()
+    normalized = _NEGATED_SCREEN_LOOK_RE.sub(" ", _normalize(text)).strip()
     if not normalized:
         return IntentVerdict(intent=VisualIntent.NONE, locale=locale)
 

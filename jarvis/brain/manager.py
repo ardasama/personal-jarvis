@@ -2116,9 +2116,9 @@ def _extract_leaked_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
 
 # Single source of truth for the reply-language vocabulary (Python ↔ REST ↔ TS).
 # "auto" = mirror the user's input language; the rest hard-pin that language.
-SUPPORTED_REPLY_LANGUAGES: tuple[str, ...] = ("auto", "de", "en", "es")
+SUPPORTED_REPLY_LANGUAGES: tuple[str, ...] = ("auto", "de", "en", "es", "tr")
 _REPLY_LANGS: frozenset[str] = frozenset(SUPPORTED_REPLY_LANGUAGES)
-_REPLY_LANG_NAMES: dict[str, str] = {"de": "German", "en": "English", "es": "Spanish"}
+_REPLY_LANG_NAMES: dict[str, str] = {"de": "German", "en": "English", "es": "Spanish", "tr": "Turkish"}
 
 # Spoken confirmation for a deterministic reply-language switch (the
 # voice_command_gate "language_switch" path). Keyed by target code and phrased
@@ -2129,6 +2129,7 @@ _LANG_SWITCH_CONFIRM: dict[str, str] = {
     "de": "Erledigt — ich antworte ab jetzt auf Deutsch.",
     "en": "Done — I'll reply in English from now on.",
     "es": "Listo — a partir de ahora respondo en español.",
+    "tr": "Tamam, bundan sonra Türkçe yanıt vereceğim.",  # i18n-allow: Turkish spoken confirmation
     "auto": "Erledigt — ich passe meine Sprache ab jetzt automatisch deiner an.",
 }
 
@@ -2139,6 +2140,7 @@ _LANG_SWITCH_CONFIRM_SESSION: dict[str, str] = {
     "de": "Für diese Sitzung antworte ich auf Deutsch — dauerhaft speichern hat nicht geklappt.",
     "en": "For this session I'll reply in English — saving it permanently didn't work.",
     "es": "Por esta sesión responderé en español — no pude guardarlo de forma permanente.",
+    "tr": "Bu oturumda Türkçe yanıt vereceğim; kalıcı olarak kaydedemedim.",  # i18n-allow: Turkish persistence warning
 }
 
 # Sub-agent (Heavy-Task worker) provider switch — the voice_command_gate
@@ -3534,9 +3536,12 @@ class BrainManager:
         return ready
 
     def _lead_vision_chain(
-        self, chain: list[tuple[str, str | None]]
+        self,
+        chain: list[tuple[str, str | None]],
+        *,
+        include_screen_model: bool = True,
     ) -> list[tuple[str, str | None]]:
-        """On an image turn, put the router vision FAST model first.
+        """On an image turn, prefer an opted-in look model, then router FAST.
 
         Live 2026-08-31 17:06: a realtime screenshot delegated through
         ``prefer_tool_model`` led with Vertex ``gemini-3.7-flash`` (the Tool
@@ -3570,7 +3575,29 @@ class BrainManager:
             else:
                 rest.append((provider, model))
 
-        # Router first (from config), then the rest of the chain. The chat
+        # Only a user-configured pair may prepend a dedicated image model.
+        # Do not override a turn-scoped model/credential or a failed capability
+        # check. A blind candidate must not hide the healthy normal chain.
+        screen = getattr(self._config, "screen_context", None)
+        look_provider = str(getattr(screen, "vision_provider", "") or "").strip()
+        look_model = str(getattr(screen, "vision_model", "") or "").strip()
+        if (
+            include_screen_model
+            and look_provider
+            and look_model
+            and look_provider not in self._dead_providers
+        ):
+            if self._provider_advertises_vision(look_provider, look_model):
+                vision.append((look_provider, look_model))
+                seen.add(look_provider)
+            else:
+                log.warning(
+                    "Configured screen look model %s(%s) is not vision-capable; "
+                    "keeping the normal image chain.",
+                    look_provider, look_model,
+                )
+
+        # Router next (from config), then the rest of the chain. The chat
         # primary is not a ranking signal — it may be a billed-out slot.
         if isinstance(router_provider, str) and router_provider:
             _consider(router_provider, None)
@@ -4011,7 +4038,7 @@ class BrainManager:
 
     @property
     def reply_language(self) -> str:
-        """The active reply-language pin: ``auto`` | ``de`` | ``en`` | ``es``."""
+        """The active reply-language pin: ``auto`` | ``de`` | ``en`` | ``es`` | ``tr``."""
         return self._reply_language
 
     @property
@@ -11994,7 +12021,14 @@ class BrainManager:
 
         vision_capable_seen = False
         if images:
-            chain = self._lead_vision_chain(chain)
+            from jarvis.core.model_selection import operation_model
+
+            chain = self._lead_vision_chain(
+                chain,
+                include_screen_model=(
+                    turn_override is None and operation_model.get() is None
+                ),
+            )
         screen_turn_t0 = time.perf_counter() if images else None
 
         for idx, (prov_name, model) in enumerate(chain):

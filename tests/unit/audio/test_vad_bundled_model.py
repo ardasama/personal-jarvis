@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import importlib.util
 import runpy
+import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -86,13 +88,42 @@ def test_silero_vad_package_is_absent_from_every_install_profile() -> None:
 
 
 def test_resolved_dependency_set_contains_no_silero_or_torch() -> None:
-    """The lock must prove that no optional profile resolves the removed stack."""
+    """VAD stays torch-free; opt-in Turkish TTS may carry its own torch runtime.
+
+    A universal uv.lock is the union of ALL extras, not the default install.
+    Verify concrete exported profiles so the heavyweight TTS stack cannot
+    leak into base, full, local-voice, or dev installations.
+    """
     data = tomllib.loads(UV_LOCK.read_text(encoding="utf-8"))
     names = {
         package["name"].lower().replace("_", "-")
         for package in data.get("package", [])
     }
-    assert names.isdisjoint({"silero-vad", "torch", "torchaudio", "torchvision"})
+    assert names.isdisjoint({"silero-vad", "torchaudio", "torchvision"})
+    assert {"pocket-tts-turkish", "pocket-tts"} <= names
+    uv = shutil.which("uv")
+    assert uv, "uv is required to verify universal lock install profiles"
+    for extra in (None, "full", "local-voice", "dev"):
+        cmd = [
+            uv, "export", "--frozen", "--no-dev", "--no-default-groups",
+            "--no-emit-project", "--format", "requirements-txt",
+        ]
+        if extra:
+            cmd.extend(("--extra", extra))
+        result = subprocess.run(
+            cmd, cwd=REPO_ROOT, check=True, capture_output=True, text=True
+        )
+        resolved = result.stdout.lower().splitlines()
+        assert not any(
+            line.startswith(("torch==", "silero-vad==", "torchaudio==", "torchvision=="))
+            for line in resolved
+        ), f"unexpected heavyweight audio stack in {extra or 'base'} install"
+    opt_in = subprocess.run(
+        [uv, "export", "--frozen", "--no-dev", "--no-default-groups",
+         "--no-emit-project", "--format", "requirements-txt", "--extra", "turkish-voice"],
+        cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+    )
+    assert any(line.startswith("torch==") for line in opt_in.stdout.lower().splitlines())
 
 
 @pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])

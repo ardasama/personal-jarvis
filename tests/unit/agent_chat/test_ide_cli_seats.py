@@ -354,6 +354,50 @@ def test_plan_opencode_speaks_run_json_and_the_stance_flags(stubbed: None) -> No
     assert "--auto" not in plan.argv and "--agent" not in plan.argv
 
 
+@pytest.mark.parametrize(
+    ("model", "effort", "expected"),
+    [
+        (
+            "openrouter/nvidia/nemotron-3.5-super-vl:free",
+            "",
+            "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        ),
+        ("provider/model", "high", "provider/model#high"),
+        ("provider/model#high", "high", "provider/model#high"),
+        ("provider/model#fast", "", "provider/model#fast"),
+    ],
+)
+def test_opencode_variant_uses_the_model_reference(
+    stubbed: None, model: str, effort: str, expected: str
+) -> None:
+    plan = rc.plan_opencode(
+        prompt="hello",
+        cwd=Path("."),
+        model=model,
+        effort=effort,
+        permission_mode="default",
+        resume=None,
+    )
+    assert plan.argv[plan.argv.index("--model") + 1] == expected
+    assert "--variant" not in plan.argv
+
+
+@pytest.mark.parametrize(
+    ("model", "effort"),
+    [("", "high"), ("provider/model#low", "high")],
+)
+def test_opencode_rejects_ambiguous_model_variants(stubbed: None, model: str, effort: str) -> None:
+    with pytest.raises(ValueError, match="model variant|model variants"):
+        rc.plan_opencode(
+            prompt="hello",
+            cwd=Path("."),
+            model=model,
+            effort=effort,
+            permission_mode="default",
+            resume=None,
+        )
+
+
 def test_plan_kimi_prints_json_and_finds_its_session_afterwards(stubbed: None) -> None:
     plan = rc.plan_kimi(
         prompt="hi", cwd=Path("."), model="k2", effort="", permission_mode="auto", resume=None

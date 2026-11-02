@@ -1,0 +1,101 @@
+{
+  "first_run": {
+    "back": "Geri dön",
+    "continue": "Devam etmeye devam et",
+    "step_of": "{current} / {total}",
+    "window": {
+      "title": "{name} kurulumunu tamamla",
+      "progress": "Kurulum ilerlemesi",
+      "language": "Dil Dili"
+    },
+    "name": {
+      "pill": "Name Name Name Name Name Name Name Name Name Name Name",
+      "title": "Merhaba! Bana nasıl hitap etmek istersin?",
+      "lede": "Dilediğin ismi seç. Bu aynı zamanda uyandırma sözcüğüm: Seslendiğinde seni dinlerim. İstediğin zaman Ayarlar'dan değiştirebilirsin.",
+      "label": "Asistanın adı",
+      "placeholder": "Bir isim yaz…"
+    },
+    "connect": {
+      "pill": "Connect Connect Connect",
+      "title": "Yapay zekânı bağla",
+      "lede": "Zaten kullandığın bir abonelikle giriş yap veya API anahtarı ekle. {name} için düşünmek ve konuşmak üzere birinin bağlı olması yeterli.",
+      "sign_in": "Sign in in Sign in",
+      "api_key": "API anahtar anahtarı",
+      "ready": "Hazır Hazır Hazır Hazır",
+      "checking": "Checking...",
+      "waiting": "Bekleniyor…",
+      "signed_in": "Oturum açıldı",
+      "signed_in_as": "{account} hesabıyla giriş yapıldı",
+      "key_saved": "API anahtarı kaydedildi",
+      "plans_or_key": "{plans} veya bir API anahtarı",
+      "key_only": "API anahtar anahtarı",
+      "more": "Diğer sağlayıcılar",
+      "finish_in_browser": "Tarayıcıda giriş işlemini tamamla.",
+      "install_first": "Önce kur: Bu komutu terminalde çalıştır, ardından tekrar kontrol et.",
+      "check_again": "Tekrar tekrar kontrol edin",
+      "copy": "Kopya komut",
+      "key_connecting": "Özellikler etkinleştiriliyor…",
+      "key_connected": "Bağlandı: {provider}.",
+      "key_partial": "Bazı özellikler etkinleştirilemedi ({parts}). Bunları daha sonra API Anahtarları bölümünden düzeltebilirsin.",
+      "live_ready": "Canlı ses hazır: Konuştuğunda {name} hemen yanıt verir.",
+      "live_missing": "Sohbet çalışıyor. Canlı ses için OpenAI veya Gemini anahtarı gerekiyor; o zamana kadar {name} klasik yöntemle biraz daha yavaş konuşur.",
+      "key_security": "Abonelikler sabit aylık ücrete tabidir. API anahtarları sistemin güvenli anahtar deposunda saklanır ve yalnızca seçtiğin sağlayıcıya gönderilir.",
+      "nothing_yet": "Henüz bağlantı kurulmadı. Abonelik veya API anahtarı olmadan sohbet ve ses kapalı kalır. Daha sonra API Anahtarları bölümünden bağlayabilirsin.",
+      "later": "Şimdilik geç"
+    },
+    "voice": {
+      "pill": "Ses Ses",
+      "title": "{name} ile nasıl konuşacaksın?",
+      "lede": "Sohbete yazabilir veya konuşabilirsin: Uyandırma sözcüğünü söyle ya da Arama kısayoluna bas.",
+      "wake_title": "Uyandırma sözcüğü: {phrase}",
+      "call_title": "Arama kısayolu",
+      "call_detail": "Konuşmaya başlamak için istediğin yerde bu kısayola bas. Kendi tuşlarını seçmek için tuş alanına tıkla.",
+      "call_recording": "İstediğin tuşlara basılı tutup bırak. İptal etmek için Esc tuşuna bas.",
+      "call_none": "Henüz kısayol yok. Alana tıkla ve istediğin tuşlara bas.",
+      "call_press": "Tıkla, ardından tuşlara bas",
+      "call_change": "Arama kısayolunu değiştir",
+      "call_saved": "Kaydedildi. Konuşmaya başlamak için istediğin yerde bu kısayola bas.",
+      "call_refused": "Bu tuş birleşimi kullanılamaz. Başka bir birleşim dene.",
+      "no_word": "Henüz uyandırma sözcüğü yok",
+      "wake_on": "Uyandırma sözcüğünü sürekli dinler. Tanıma işlemi bu bilgisayarda yapılır.",
+      "wake_off": "Kapalı: Konuşmak için Arama kısayoluna bas. Sürekli seslenebilmek için bu seçeneği aç.",
+      "wake_switch": "Uyandırma sözcüğünü sürekli dinle",
+      "after_restart": "Bu özellik yeniden başlatma sonrası etkinleşir.",
+      "login_title": "Oturum açıldığında başlat",
+      "login_detail": "Bilgisayar açıldığında {name} de başlar ve seni dinlemeye hazır olur.",
+      "preview_note": "Bu yalnızca önizleme; hiçbir şey yeniden başlatılmaz.",
+      "restart_note": "Sırada uygulamayı tanıtan kısa bir tur var. Sonunda özellikleri etkinleştirmek için uygulama bir kez yeniden başlatılır (yaklaşık on saniye).",
+      "start": "Uygulamayı tanıt"
+    },
+    "tour": {
+      "title": "{name} ile kısa bir tur",
+      "lede": "Yardımcı karakterin uygulamayı gezdirip bölümleri açıklayacak.",
+      "next": "Sonraki Sonraki Sonraki Sonraki Sonraki Sonraki Sonraki Sonraki",
+      "finish": "Hadi gidelim",
+      "skip": "Skip",
+      "labels": {
+        "chat": "Chat Chat Chat",
+        "voice": "Ses sohbet",
+        "agents": "Agents",
+        "ide": "Ajan geliştirme ortamı",
+        "plugins": "Eklentiler",
+        "wake": "Uyandırma sözcüğü",
+        "done": "Her şey hazır"
+      },
+      "stops": {
+        "chat": "Hi, I'm {pet}! Let me show you around. This is your chat with {name}. Type anything here: a question, a task, a file to look at. You never pick a tool or a model yourself; {name} decides what's needed.",
+        "voice": "Rather talk? This is voice chat. Click the bar, say your wake word or press your Call shortcut, then just speak. The wave shows who is talking.",
+        "agents": "Big jobs like research, a report or a website go to your agents. They're {name}'s team, each with its own role and model. Open Agents to watch them work, chat with one or create your own.",
+        "ide": "The Agentic IDE runs coding agents such as Claude Code and Codex in real terminals, on your own projects. Type to them directly, or let {name} steer them by voice.",
+        "plugins": "Plugins connect {name} to the apps you use: mail, calendar, notes, smart home and more. Each one becomes a new tool, and anything that sends or changes something asks you first.",
+        "wake": "Your wake word lives here in Settings. Say \"Hey {name}\" and {name} listens. Change the word, pick its language or test it anytime.",
+        "done": "That's the tour! Talk to {name} whenever you like, and if you're ever stuck, just ask. Settings → App runs this guide again."
+      }
+    }
+  },
+  "app_tour": {
+    "replay_title": "Kurulum rehberini yeniden aç",
+    "replay_body": "Kurulum penceresini (isim, yapay zekâ bağlantıları, ses) ve ardından uygulama turunu tekrar açar. Hiçbir şey yeniden başlatılmaz.",
+    "replay": "Replay"
+  }
+}

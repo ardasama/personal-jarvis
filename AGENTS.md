@@ -16,7 +16,30 @@ copies because Claude Code does not discover subagents or skills under
 for Codex. The sync scripts and CI check these copies; never edit a generated
 copy directly.
 
+**Jiku + MORPHY project lineage (2026-10-17):** for architecture, memory,
+agent orchestration, project continuity or autonomous-development changes,
+consult `docs/handoffs/JIKU_INTEGRATION_20261017.md` and
+`docs/handoffs/MORPHY_INTEGRATION_20261017.md`. These describe preserved
+legacy sources and candidate improvements, **not executable runtime authority**.
+Reuse the existing Jarvis subsystem first; do not spin up a parallel Jiku/Morphy
+kernel, restore deleted donor worktrees, or treat historical tests as live proof.
+
 ---
+
+## MANTRA project continuity
+
+Personal Jarvis owns the live assistant product, missions, memory and scheduler.
+For cross-project methodology, read the existing `../AIHub/MANTRA.md`, especially
+its "Persistence protocol v2.0" section, when accessible. AIHub owns shared
+governance; AI-AgentsforHub owns specialist definitions; ProjectOracle owns
+evolution planning and checkpoints. Their separate roots are not automatically
+loaded just because they are writable or attached to a Codex project.
+This repository's architecture, cost boundaries and validation workflow below
+remain authoritative; AIHub-specific executor assignments do not replace them.
+Resume from `docs/handoffs/ASLAN-JIKU-JARVIS-20261017.md`, the verification update
+`docs/handoffs/MANTRA_PERSISTENCE_20261017.md` and current Git/tests,
+not historical completion claims. If shared guidance is unavailable, record it
+and continue safe local work without inventing a replacement authority.
 
 ## 1. Traps no one guesses
 

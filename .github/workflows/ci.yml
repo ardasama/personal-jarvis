@@ -448,11 +448,21 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: python scripts/ci/ratchet_tests.py check --baseline scripts/ci/test-baseline-linux.json "out/test-report-linux-$SHARD.json"
       - name: Upload shard report
+        id: report-upload-first
         if: always()
+        continue-on-error: true # A transient GitHub artifact ECONNRESET gets one bounded retry.
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: tests-linux-${{ matrix.shard }}
           path: out/
+          retention-days: 14
+      - name: Retry transient artifact upload once
+        if: ${{ always() && steps.report-upload-first.outcome == 'failure' }}
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: tests-linux-${{ matrix.shard }}
+          path: out/
+          overwrite: true
           retention-days: 14
 
   tests-windows:
@@ -521,11 +531,21 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: python scripts/ci/ratchet_tests.py check --baseline scripts/ci/test-baseline-windows.json "out/test-report-windows-$SHARD.json"
       - name: Upload shard report
+        id: report-upload-first
         if: always()
+        continue-on-error: true # A transient GitHub artifact ECONNRESET gets one bounded retry.
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: tests-windows-${{ matrix.shard }}
           path: out/
+          retention-days: 14
+      - name: Retry transient artifact upload once
+        if: ${{ always() && steps.report-upload-first.outcome == 'failure' }}
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: tests-windows-${{ matrix.shard }}
+          path: out/
+          overwrite: true
           retention-days: 14
 
   tests-macos:
@@ -561,11 +581,21 @@ jobs:
       - name: Ratchet (a failure not in the baseline blocks)
         run: python scripts/ci/ratchet_tests.py check --baseline scripts/ci/test-baseline-macos.json out/test-report-macos-${{ matrix.shard }}.json
       - name: Upload shard report
+        id: report-upload-first
         if: always()
+        continue-on-error: true # A transient GitHub artifact ECONNRESET gets one bounded retry.
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: tests-macos-${{ matrix.shard }}
           path: out/
+          retention-days: 14
+      - name: Retry transient artifact upload once
+        if: ${{ always() && steps.report-upload-first.outcome == 'failure' }}
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: tests-macos-${{ matrix.shard }}
+          path: out/
+          overwrite: true
           retention-days: 14
 
   test-report:
