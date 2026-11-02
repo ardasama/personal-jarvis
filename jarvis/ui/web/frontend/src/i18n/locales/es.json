@@ -3542,13 +3542,18 @@
       "zh": {
         "label": "中文 (chino)",
         "description": "Chino simplificado para cada etiqueta y botón."
+      },
+      "tr": {
+        "label": "Türkçe (turco)",
+        "description": "Usa turco para todas las etiquetas y botones."
       }
     },
     "reply_options": {
       "auto": "{name} refleja el idioma que hables o escribas.",
       "en": "{name} responde en inglés.",
       "de": "{name} responde en alemán.",
-      "es": "{name} responde en español."
+      "es": "{name} responde en español.",
+      "tr": "{name} responde en turco."
     },
     "stt_options": {
       "auto": "Detecta automáticamente el idioma que hablas.",
