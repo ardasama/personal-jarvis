@@ -55,7 +55,7 @@ DEFAULT_LOCALE = "en"
 
 #: The codes an explicit ``brain.reply_language`` pin may carry (``"auto"`` is
 #: deliberately absent — it means "no pin, mirror the input").
-_REPLY_PINS: frozenset[str] = frozenset({"de", "en", "es"})
+_REPLY_PINS: frozenset[str] = frozenset({"de", "en", "es", "tr"})
 
 #: A turn with at most this many word tokens is a "thin" turn — a one- or
 #: two-word interjection ("Now", "Stop now", "jetzt", a lone loanword). A thin
@@ -83,7 +83,7 @@ _LANGUAGE_REQUEST_RE = re.compile(
     r"(?:(?:always|from now on|immer|ab jetzt|siempre|a partir de ahora)\s+)?"  # i18n-allow
     r"(?:(?:in|auf|en|to|zu|a)\s+)?"  # i18n-allow
     r"(?P<language>deutsch|german|alemán|aleman|english|englisch|inglés|ingles"  # i18n-allow
-    r"|español|espanol|spanish|spanisch)"  # i18n-allow
+    r"|español|espanol|spanish|spanisch|türkçe|turkce|turkish)"  # i18n-allow
     r"(?:\s+(?:antworten|sprechen))?"  # i18n-allow
     r"(?:[\s,]+(?:please|bitte|por favor|now|jetzt|ahora))?"  # i18n-allow
     r"[\s.!?]*",
@@ -93,6 +93,7 @@ _REQUEST_LANGUAGE_CODES = {
     "deutsch": "de", "german": "de", "alemán": "de", "aleman": "de",  # i18n-allow
     "english": "en", "englisch": "en", "inglés": "en", "ingles": "en",  # i18n-allow
     "español": "es", "espanol": "es", "spanish": "es", "spanisch": "es",  # i18n-allow
+    "türkçe": "tr", "turkce": "tr", "turkish": "tr",  # i18n-allow
 }
 
 # Output validation deliberately ignores code and links. They frequently carry
@@ -204,6 +205,7 @@ _TAG_TO_CODE: dict[str, str] = {
     "en": "en", "eng": "en", "english": "en", "englisch": "en",
     "es": "es", "spa": "es", "spanish": "es", "spanisch": "es",
     "espanol": "es", "español": "es", "castellano": "es",
+    "tr": "tr", "tur": "tr", "turkish": "tr", "türkçe": "tr", "turkce": "tr",
 }
 
 
