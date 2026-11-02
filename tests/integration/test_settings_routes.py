@@ -61,7 +61,7 @@ def test_get_returns_current_language_and_options(server: WebServer) -> None:
         assert resp.status_code == 200
         body = resp.json()
         assert body["language"] == "auto"
-        assert set(body["options"]) == {"auto", "de", "en", "es"}
+        assert set(body["options"]) == {"auto", "de", "en", "es", "tr"}
 
 
 def test_put_switches_live_brain(server: WebServer) -> None:
