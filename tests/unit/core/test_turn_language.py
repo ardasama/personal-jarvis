@@ -418,6 +418,22 @@ def test_turkish_pinned_reply_never_false_blocks_on_german_overlap(
     assert result.should_block is False
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The weather in İstanbul is sunny today and you should bring sunglasses.",
+        "Ayşe is the contact for this meeting and she will send the notes.",
+    ],
+)
+def test_turkish_pin_does_not_hide_english_corruption_with_proper_names(
+    text: str,
+) -> None:
+    result = validate_output_language(text, resolved_language="tr")
+    assert result.status == "mismatch"
+    assert result.detected_language == "en"
+    assert result.should_block is True
+
+
 def test_turkish_pinned_reply_still_blocks_clear_english_corruption() -> None:
     result = validate_output_language(
         "The answer is in English and the information should be checked.",
