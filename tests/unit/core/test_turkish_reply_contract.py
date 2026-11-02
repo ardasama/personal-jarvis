@@ -36,5 +36,5 @@ def test_explicit_turkish_request_and_output_validation_are_safe() -> None:
     assert detect_language_request("Please reply in Turkish") == "tr"
     # A sentence the three-language classifier cannot confidently label
     # must not be blocked simply because the user explicitly pinned Turkish.
-    result = validate_output_language("Merhaba, size nasıl yardımcı olabilirim?", resolved_language="tr")
+    result = validate_output_language("Merhaba, size nasıl yardımcı olabilirim?", resolved_language="tr")  # i18n-allow: Turkish sample reply
     assert not result.should_block
