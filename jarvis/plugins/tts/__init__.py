@@ -777,7 +777,7 @@ def _build_provider(tts_cfg: Any, provider: str) -> Any:
         pocket = pocket if isinstance(pocket, dict) else {}
         return PocketTurkishTTS(
             voice=str(pocket.get("voice") or getattr(tts_cfg, "voice_tr", None) or "male_1"),
-            emotion=str(pocket.get("emotion") or "sakin"),
+            emotion=str(pocket.get("emotion") or "sakin"),  # i18n-allow: Turkish emotion default
         )
 
     if provider in ("piper-local", "piper"):
