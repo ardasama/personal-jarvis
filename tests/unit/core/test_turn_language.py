@@ -402,6 +402,48 @@ def test_output_language_validator_keeps_ambiguous_content_non_blocking(
     assert result.should_block is False
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Üç bin kişi bugün burada toplandı.",  # i18n-allow: Turkish output regression
+        "Bugün burada insanlar var ve güzel haberler bekliyoruz.",  # i18n-allow
+        "Şimdi bir sonraki adımı açıklayacağım.",  # i18n-allow
+    ],
+)
+def test_turkish_pinned_reply_never_false_blocks_on_german_overlap(
+    text: str,
+) -> None:
+    result = validate_output_language(text, resolved_language="tr")
+    assert result.status == "indeterminate"
+    assert result.should_block is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The weather in İstanbul is sunny today and you should bring sunglasses.",
+        "Ayşe is the contact for this meeting and she will send the notes.",
+    ],
+)
+def test_turkish_pin_does_not_hide_english_corruption_with_proper_names(
+    text: str,
+) -> None:
+    result = validate_output_language(text, resolved_language="tr")
+    assert result.status == "mismatch"
+    assert result.detected_language == "en"
+    assert result.should_block is True
+
+
+def test_turkish_pinned_reply_still_blocks_clear_english_corruption() -> None:
+    result = validate_output_language(
+        "The answer is in English and the information should be checked.",
+        resolved_language="tr",
+    )
+    assert result.status == "mismatch"
+    assert result.detected_language == "en"
+    assert result.should_block is True
+
+
 def test_output_language_validator_does_not_reject_a_chinese_name() -> None:
     result = validate_output_language(
         "The Beijing office uses 北京 for its local label.",

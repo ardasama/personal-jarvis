@@ -202,6 +202,10 @@ def _resolve_keyed_tts_provider(primary_name: str, tts_cfg: Any) -> tuple[str, A
     Windows, or logs an honest mute) — never a silent swap.
     """
     canonical = _canonical_tts_name(primary_name)
+    if canonical == "pocket-turkish":
+        # Explicit offline selections, including the underscore spelling, must
+        # use the local factory. Never fall back to a cloud TTS family.
+        return canonical, tts_cfg
     if _tts_has_credential(canonical, tts_cfg):
         # An explicit offline Turkish voice must keep its canonical family ID.
         # Returning the configured underscore alias breaks factory parity and

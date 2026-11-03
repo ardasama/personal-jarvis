@@ -3544,13 +3544,18 @@
       "zh": {
         "label": "中文",
         "description": "所有标签和按钮都使用简体中文。"
+      },
+      "tr": {
+        "label": "Türkçe（土耳其语）",
+        "description": "所有标签和按钮使用土耳其语。"
       }
     },
     "reply_options": {
       "auto": "{name}会使用你说或输入的语言。",
       "en": "{name} answers in English.",
       "de": "{name} antwortet auf Deutsch.",
-      "es": "{name} responde en español."
+      "es": "{name} responde en español.",
+      "tr": "{name}使用土耳其语回答。"
     },
     "stt_options": {
       "auto": "自动检测你说的语言。",

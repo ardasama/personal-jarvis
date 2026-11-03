@@ -59,6 +59,9 @@ class PocketTurkishTTS:
         self._load_lock = asyncio.Lock()
         self._synthesis_lock = asyncio.Lock()
         self._active_stop: threading.Event | None = None
+        # Retain references while a cancelled stream's thread may still call
+        # the model. Never concurrently reuse that same model instance.
+        self._retired_workers: dict[int, tuple[Any, asyncio.Task[None]]] = {}
 
     async def _load(self) -> Any:
         if self._model is not None:
@@ -130,6 +133,11 @@ class PocketTurkishTTS:
         self.last_voice = selected
         self.last_voice_provider = self.name
         async with self._synthesis_lock:
+            if any(
+                old_model is model and not task.done()
+                for old_model, task in self._retired_workers.values()
+            ):
+                raise RuntimeError("Turkish voice engine is still stopping; retry later")
             self._active_stop = stop
             worker = asyncio.create_task(asyncio.to_thread(produce), name="pocket-tr-speech")
             emitted = False
@@ -160,8 +168,20 @@ class PocketTurkishTTS:
                 stop.set()
                 self._active_stop = None
                 if not worker.done():
-                    with suppress(TimeoutError):
-                        await asyncio.wait_for(asyncio.shield(worker), timeout=1.0)
+                    try:
+                        with suppress(TimeoutError):
+                            await asyncio.wait_for(asyncio.shield(worker), timeout=1.0)
+                    finally:
+                        if not worker.done():
+                            # The shielded thread can continue after a STOP
+                            # timeout/cancellation. Retire the model instead of
+                            # releasing the lock with a reusable live instance.
+                            self._retired_workers[id(worker)] = (model, worker)
+                            if self._model is model:
+                                self._model = None
+                            worker.add_done_callback(
+                                lambda completed: self._retired_workers.pop(id(completed), None)
+                            )
 
     async def aclose(self) -> None:
         # STOP must interrupt a currently active stream, not just unload weights.

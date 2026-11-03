@@ -3542,13 +3542,18 @@
       "zh": {
         "label": "中文 (Chinese)",
         "description": "Use Simplified Chinese for every label and button."
+      },
+      "tr": {
+        "label": "Türkçe (Turkish)",
+        "description": "Use Turkish for every label and button."
       }
     },
     "reply_options": {
       "auto": "{name} mirrors whichever language you speak or type.",
       "en": "{name} answers in English.",
       "de": "{name} antwortet auf Deutsch.",
-      "es": "{name} responde en español."
+      "es": "{name} responde en español.",
+      "tr": "{name} answers in Turkish."
     },
     "stt_options": {
       "auto": "Detect the language you speak automatically.",

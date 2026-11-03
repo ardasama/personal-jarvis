@@ -209,3 +209,39 @@ def test_stop_before_first_audio_unblocks_consumer() -> None:
         await stream.aclose()
 
     asyncio.run(verify())
+
+
+def test_cancelled_worker_cannot_reuse_a_still_active_model() -> None:
+    """A cancelled generator must not run the same model concurrently (AP-24)."""
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingModel(FakeModel):
+        def stream(self, text, *, voice, emotion):
+            self.calls.append((text, voice, emotion))
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError("test worker was not released")
+            yield np.array([0.25], dtype=np.float32)
+
+    async def verify():
+        engine = PocketTurkishTTS()
+        model = BlockingModel()
+        bind_fake_model(engine, model)  # Simulates a stale model still returned by a factory.
+        stream = engine.synthesize("Deneme", language_code="tr")
+        pending = asyncio.create_task(stream.__anext__())
+        try:
+            assert await asyncio.to_thread(started.wait, 1.0)
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            with pytest.raises(RuntimeError, match="still stopping"):
+                await collect(engine, "Yeniden dene", language_code="tr")
+            assert len(model.calls) == 1
+        finally:
+            release.set()
+            await asyncio.sleep(0.05)
+
+    asyncio.run(verify())
